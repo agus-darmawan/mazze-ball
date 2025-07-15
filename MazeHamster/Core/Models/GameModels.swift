@@ -135,6 +135,7 @@ struct GameConfiguration {
     let ballRadius: Float
     let exitRadius: Float
     let cameraHeight: Float
+    let catSleepDuration: TimeInterval
     
     static let `default` = GameConfiguration(
         maze: .default,
@@ -142,6 +143,7 @@ struct GameConfiguration {
         visualMaterials: .default,
         ballRadius: 0.2,
         exitRadius: 0.3,
-        cameraHeight: 8.0
+        cameraHeight: 8.0,
+        catSleepDuration: 3.0
     )
 } 

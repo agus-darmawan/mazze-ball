@@ -187,6 +187,12 @@ class GameService: BaseService, GameServiceProtocol {
         print("⚠️ Subtracted \(points) points. Total score: \(score)")
     }
     
+    /// Set game state directly
+    func setGameState(_ newState: GameState) {
+        gameState = newState
+        print("🎮 Game state changed to: \(newState)")
+    }
+    
     // MARK: - Cleanup
     
     deinit {

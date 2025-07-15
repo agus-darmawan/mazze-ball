@@ -1,6 +1,7 @@
 import Foundation
 import RealityKit
 import simd
+import GameplayKit
 
 // MARK: - ECS Component Protocol
 
@@ -101,6 +102,76 @@ struct GameEntityComponent: GameComponent {
     }
 }
 
+/// Component for AI agent behavior
+struct AIAgentComponent: GameComponent {
+    let entityId: UUID
+    var agent: GKAgent3D
+    var behavior: GKBehavior
+    var maxSpeed: Float
+    var maxAcceleration: Float
+    var targetEntityId: UUID?
+    var lastKnownTargetPosition: SIMD3<Float>?
+    
+    // Sleep mechanism
+    var sleepDuration: TimeInterval
+    var sleepStartTime: Date?
+    var isSleeping: Bool
+    
+    init(entityId: UUID, maxSpeed: Float = 0.3, maxAcceleration: Float = 0.8, sleepDuration: TimeInterval = 3.0) {
+        self.entityId = entityId
+        self.maxSpeed = maxSpeed
+        self.maxAcceleration = maxAcceleration
+        self.sleepDuration = sleepDuration
+        self.sleepStartTime = nil
+        self.isSleeping = false
+        
+        // Create GameplayKit agent
+        let agent = GKAgent3D()
+        agent.maxSpeed = maxSpeed
+        agent.maxAcceleration = maxAcceleration
+        agent.radius = 0.3
+        agent.mass = 1.0
+        
+        self.agent = agent
+        self.behavior = GKBehavior()
+    }
+    
+    /// Start the sleep period
+    mutating func startSleep() {
+        isSleeping = true
+        sleepStartTime = Date()
+    }
+    
+    /// Check if the sleep period has ended
+    func isSleepFinished() -> Bool {
+        guard let startTime = sleepStartTime else { return false }
+        return Date().timeIntervalSince(startTime) >= sleepDuration
+    }
+    
+    /// Wake up from sleep
+    mutating func wakeUp() {
+        isSleeping = false
+        sleepStartTime = nil
+    }
+}
+
+/// Component for pathfinding data
+struct PathfindingComponent: GameComponent {
+    let entityId: UUID
+    var currentPath: [SIMD3<Float>]
+    var currentPathIndex: Int
+    var isFollowingPath: Bool
+    var pathfindingRadius: Float
+    
+    init(entityId: UUID, pathfindingRadius: Float = 0.5) {
+        self.entityId = entityId
+        self.currentPath = []
+        self.currentPathIndex = 0
+        self.isFollowingPath = false
+        self.pathfindingRadius = pathfindingRadius
+    }
+}
+
 // CameraComponent removed - using simplified fixed camera approach
 
 // MARK: - Game Entity Types
@@ -113,6 +184,7 @@ enum GameEntityType {
     case maze
     case camera
     case light
+    case cat
 }
 
 // MARK: - Component Storage

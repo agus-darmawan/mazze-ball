@@ -29,6 +29,9 @@ class GameCoordinator: ObservableObject {
     private var gameConfiguration: GameConfiguration
     private var currentScene: Entity?
     private var isRunning: Bool = false
+    private var catEntity: Entity?
+    private var catEntityId: UUID?
+    private var ballEntityId: UUID?
     
     // MARK: - Combine
     
@@ -155,6 +158,53 @@ class GameCoordinator: ObservableObject {
         ball.position = mazeService.getStartPosition()
         physicsService.setupBallPhysics(for: ball, withMaterial: gameConfiguration.physicsMaterials.ball)
         
+        // Create ball entity for ECS tracking
+        ballEntityId = UUID()
+        let ballTransformComponent = TransformComponent(
+            entityId: ballEntityId!,
+            position: ball.position,
+            rotation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
+            scale: SIMD3<Float>(1, 1, 1)
+        )
+        ecsWorld.componentManager.addComponent(ballTransformComponent, to: ballEntityId!)
+        
+        let ballGameEntityComponent = GameEntityComponent(
+            entityId: ballEntityId!,
+            entityType: .ball,
+            isActive: true,
+            isCollectable: false
+        )
+        ecsWorld.componentManager.addComponent(ballGameEntityComponent, to: ballEntityId!)
+        
+        // Create and setup cat
+        let ballStartPosition = mazeService.getStartPosition()
+        let catStartPosition = ballStartPosition + SIMD3<Float>(0.8, 0, 0) // Offset cat to the right of ball
+        
+        let (cat, catId) = entityFactory.createCatWithECS(
+            componentManager: ecsWorld.componentManager,
+            startPosition: catStartPosition,
+            sleepDuration: gameConfiguration.catSleepDuration
+        )
+        
+        catEntity = cat
+        catEntityId = catId
+        
+        // Register cat with AI system
+        if let aiSystem = ecsWorld.getSystem(AISystem.self) {
+            aiSystem.registerEntity(cat, with: catId)
+            aiSystem.setupChaseForCat(catEntityId: catId, targetEntityId: ballEntityId!)
+        }
+        
+        // Register cat with render system
+        if let renderSystem = ecsWorld.getSystem(RenderSystem.self) {
+            renderSystem.registerEntity(cat, with: catId)
+        }
+        
+        // Register cat with physics system
+        if let physicsSystem = ecsWorld.getSystem(PhysicsSystem.self) {
+            physicsSystem.registerEntity(cat, with: catId)
+        }
+        
         // Create camera
         let camera = cameraService.setupCamera(
             mazeSize: SIMD2<Int>(mazeService.maze.configuration.width, mazeService.maze.configuration.height),
@@ -166,6 +216,7 @@ class GameCoordinator: ObservableObject {
         
         // Add to scene
         mazeWorld.addChild(ball)
+        mazeWorld.addChild(cat)
         scene.addChild(mazeWorld)
         scene.addChild(camera)
         
@@ -178,6 +229,15 @@ class GameCoordinator: ObservableObject {
     /// Update the game coordinator (called from main game loop)
     func updateCoordinator(deltaTime: TimeInterval) {
         guard isRunning else { return }
+        
+        // Update ball position in ECS
+        updateBallPosition()
+        
+        // Sync game state with ECS systems
+        syncGameStateWithECS()
+        
+        // Check cat-player collision
+        checkCatPlayerCollision()
         
         // Update ECS world
         ecsWorld.update(deltaTime: deltaTime)
@@ -278,12 +338,26 @@ class GameCoordinator: ObservableObject {
     }
     
     private func resetEntityPositions(in scene: Entity) {
-        // Reset ball position only (maze stays centered)
+        // Reset ball and cat positions (maze stays centered)
         scene.children.forEach { child in
             if child.name == "MazeWorld" {
                 child.children.forEach { grandChild in
                     if grandChild.name == "MazeBall" {
                         grandChild.position = mazeService.getStartPosition()
+                    } else if grandChild.name == "CatAgent" {
+                        let ballStartPosition = mazeService.getStartPosition()
+                        let catStartPosition = ballStartPosition + SIMD3<Float>(0.8, 0, 0) // Offset cat to the right of ball
+                        grandChild.position = catStartPosition
+                        
+                        // Update cat's transform component and restart sleep
+                        if let catEntityId = catEntityId,
+                           var catTransform = ecsWorld.componentManager.getComponent(TransformComponent.self, for: catEntityId),
+                           var catAI = ecsWorld.componentManager.getComponent(AIAgentComponent.self, for: catEntityId) {
+                            catTransform.position = catStartPosition
+                            catAI.startSleep() // Restart sleep when resetting
+                            ecsWorld.componentManager.addComponent(catTransform, to: catEntityId)
+                            ecsWorld.componentManager.addComponent(catAI, to: catEntityId)
+                        }
                     }
                 }
             }
@@ -293,6 +367,40 @@ class GameCoordinator: ObservableObject {
     private func updatePerformanceMetrics() {
         // Update performance metrics
         // Could track FPS, memory usage, etc.
+    }
+    
+    /// Sync game state with ECS systems
+    private func syncGameStateWithECS() {
+        // Update GameLogicSystem with current game state
+        if let gameLogicSystem = ecsWorld.getSystem(GameLogicSystem.self) {
+            gameLogicSystem.setGameState(gameService.gameState)
+        }
+    }
+    
+    /// Update ball position in ECS for AI tracking
+    private func updateBallPosition() {
+        guard let ballEntityId = ballEntityId,
+              let ballEntity = currentScene?.children.first(where: { $0.name == "MazeWorld" })?.children.first(where: { $0.name == "MazeBall" }) else { return }
+        
+        // Update ball's transform component with current position
+        if var ballTransform = ecsWorld.componentManager.getComponent(TransformComponent.self, for: ballEntityId) {
+            ballTransform.position = ballEntity.position
+            ballTransform.rotation = ballEntity.transform.rotation
+            ecsWorld.componentManager.addComponent(ballTransform, to: ballEntityId)
+        }
+    }
+    
+    /// Check if cat has caught the player
+    private func checkCatPlayerCollision() {
+        guard let catEntityId = catEntityId,
+              let ballEntityId = ballEntityId,
+              let aiSystem = ecsWorld.getSystem(AISystem.self) else { return }
+        
+        if aiSystem.checkCatPlayerCollision(catEntityId: catEntityId, playerEntityId: ballEntityId) {
+            // Cat caught the player - game over
+            gameService.setGameState(.failed)
+            print("🐱 Cat caught the player! Game Over!")
+        }
     }
     
     // MARK: - Service Access

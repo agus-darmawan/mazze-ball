@@ -2,6 +2,7 @@ import Foundation
 import RealityKit
 import simd
 import CoreMotion
+import GameplayKit
 
 // MARK: - ECS System Protocol
 
@@ -32,12 +33,12 @@ class PhysicsSystem: GameSystem {
         let physicsEntities = componentManager.getAllEntitiesWithComponent(PhysicsComponent.self)
         
         for entityId in physicsEntities {
-            guard let physicsComponent = componentManager.getComponent(PhysicsComponent.self, for: entityId),
+            guard let _ = componentManager.getComponent(PhysicsComponent.self, for: entityId),
                   let transformComponent = componentManager.getComponent(TransformComponent.self, for: entityId),
                   let realityEntity = realityEntities[entityId] else { continue }
             
             // Update RealityKit entity physics from component
-            if let physicsBody = realityEntity.components[PhysicsBodyComponent.self] {
+            if realityEntity.components[PhysicsBodyComponent.self] != nil {
                 // Sync component data to RealityKit
                 realityEntity.position = transformComponent.position
                 realityEntity.transform.rotation = transformComponent.rotation
@@ -258,6 +259,206 @@ class GameLogicSystem: GameSystem {
     }
 }
 
+/// System for handling AI agent behavior
+class AISystem: GameSystem {
+    let componentManager: ComponentManager
+    private var realityEntities: [UUID: Entity] = [:]
+    private var agentSystem: GKComponentSystem<GKAgent3D>
+    
+    init(componentManager: ComponentManager) {
+        self.componentManager = componentManager
+        self.agentSystem = GKComponentSystem(componentClass: GKAgent3D.self)
+    }
+    
+    func initialize() {
+        // Initialize AI system settings
+        print("🤖 AI System initialized")
+    }
+    
+    func update(deltaTime: TimeInterval) {
+        let aiEntities = componentManager.getAllEntitiesWithComponent(AIAgentComponent.self)
+        
+        if !aiEntities.isEmpty {
+            print("🤖 AI System updating \(aiEntities.count) entities")
+        }
+        
+        for entityId in aiEntities {
+            guard var aiComponent = componentManager.getComponent(AIAgentComponent.self, for: entityId),
+                  let transformComponent = componentManager.getComponent(TransformComponent.self, for: entityId) else { continue }
+            
+            // Handle sleep state
+            if aiComponent.isSleeping {
+                if aiComponent.isSleepFinished() {
+                    // Wake up and start chasing
+                    aiComponent.wakeUp()
+                    componentManager.addComponent(aiComponent, to: entityId)
+                    print("🐱 Cat \(entityId) woke up and started chasing!")
+                } else {
+                    // Still sleeping, skip AI processing
+                    print("😴 Cat \(entityId) is still sleeping...")
+                    continue
+                }
+            }
+            
+            // Update agent position from transform (current cat position)
+            let agent = aiComponent.agent
+            let currentPosition = transformComponent.position
+            agent.position = vector_float3(currentPosition)
+            
+            // Update target position if we have a target
+            if let targetId = aiComponent.targetEntityId,
+               let targetTransform = componentManager.getComponent(TransformComponent.self, for: targetId) {
+                let targetPosition = targetTransform.position
+                let distance = simd_distance(currentPosition, targetPosition)
+                
+                print("🎯 Cat \(entityId) at \(currentPosition) chasing target at \(targetPosition), distance: \(distance)")
+                
+                updateChaseTarget(for: entityId, targetPosition: targetPosition)
+            } else {
+                print("⚠️ Cat \(entityId) has no target entity!")
+            }
+            
+            // Update agent behavior
+            agentSystem.update(deltaTime: deltaTime)
+            
+            // Apply agent movement to transform
+            applyAgentMovement(for: entityId, agent: agent)
+        }
+    }
+    
+    func shutdown() {
+        realityEntities.removeAll()
+        print("🤖 AI System shut down")
+    }
+    
+    /// Register a RealityKit entity with the AI system
+    func registerEntity(_ entity: Entity, with entityId: UUID) {
+        realityEntities[entityId] = entity
+    }
+    
+    /// Set up chase behavior for a cat entity
+    func setupChaseForCat(catEntityId: UUID, targetEntityId: UUID) {
+        guard var aiComponent = componentManager.getComponent(AIAgentComponent.self, for: catEntityId) else { return }
+        
+        // Set the target
+        aiComponent.targetEntityId = targetEntityId
+        
+        // Start the cat in sleeping state
+        aiComponent.startSleep()
+        
+        // Create chase goal (will be used when cat wakes up)
+        let seekGoal = GKGoal(toSeekAgent: aiComponent.agent)
+        
+        // Create behavior with the goal
+        let behavior = GKBehavior()
+        behavior.setWeight(1.0, for: seekGoal)
+        
+        // Update the component
+        aiComponent.behavior = behavior
+        aiComponent.agent.behavior = behavior
+        
+        // Add agent to system
+        agentSystem.addComponent(aiComponent.agent)
+        
+        // Update the component in the manager
+        componentManager.addComponent(aiComponent, to: catEntityId)
+        
+        print("🐱 Chase behavior set up for cat entity - starting sleep for \(aiComponent.sleepDuration) seconds")
+    }
+    
+    /// Update the chase target position
+    private func updateChaseTarget(for entityId: UUID, targetPosition: SIMD3<Float>) {
+        guard var aiComponent = componentManager.getComponent(AIAgentComponent.self, for: entityId) else { return }
+        
+        // Update last known target position
+        aiComponent.lastKnownTargetPosition = targetPosition
+        
+        // Create a properly configured target agent
+        let targetAgent = GKAgent3D()
+        targetAgent.position = vector_float3(targetPosition)
+        targetAgent.radius = 0.2  // Ball radius
+        targetAgent.mass = 1.0
+        targetAgent.maxSpeed = 0.1
+        targetAgent.maxAcceleration = 0.1
+        
+        // Create seek goal with proper weight
+        let seekGoal = GKGoal(toSeekAgent: targetAgent)
+        
+        // Create new behavior with seek goal
+        let behavior = GKBehavior()
+        behavior.setWeight(1.0, for: seekGoal)  // Start with normal weight
+        
+        // Update the agent's behavior
+        aiComponent.behavior = behavior
+        aiComponent.agent.behavior = behavior
+        
+        // Debug agent configuration
+        let agent = aiComponent.agent
+        print("🤖 Agent config - Position: \(agent.position), MaxSpeed: \(agent.maxSpeed), MaxAccel: \(agent.maxAcceleration)")
+        print("🎯 Target agent - Position: \(targetAgent.position)")
+        
+        // Update the component
+        componentManager.addComponent(aiComponent, to: entityId)
+        
+        print("🎯 Updated chase target for cat \(entityId) to position: \(targetPosition)")
+    }
+    
+    /// Apply agent movement to transform component using physics forces
+    private func applyAgentMovement(for entityId: UUID, agent: GKAgent3D) {
+        guard var transformComponent = componentManager.getComponent(TransformComponent.self, for: entityId),
+              let realityEntity = realityEntities[entityId] else { 
+            print("⚠️ Could not get transform component or reality entity for cat \(entityId)")
+            return 
+        }
+        
+        // Get the desired velocity from the agent
+        let desiredVelocity = SIMD3<Float>(agent.velocity.x, agent.velocity.y, agent.velocity.z)
+        let velocityMagnitude = length(desiredVelocity)
+        
+        // Apply movement through RealityKit physics system
+        if realityEntity.components[PhysicsBodyComponent.self] != nil {
+            let currentPosition = realityEntity.position
+            
+            // Debug information
+            if velocityMagnitude > 0.001 {
+                print("🐱 Cat \(entityId) - Current: \(currentPosition), Velocity: \(desiredVelocity), Magnitude: \(velocityMagnitude)")
+            }
+            
+            // Apply movement if there's significant velocity
+            if velocityMagnitude > 0.001 {
+                // Apply the GameplayKit velocity directly but scaled down
+                let moveSpeed: Float = 0.016  // Frame time (60fps)
+                let movement = desiredVelocity * moveSpeed
+                
+                // Calculate new position
+                let newPosition = currentPosition + movement
+                
+                // Update the entity position - RealityKit physics will handle collision
+                realityEntity.position = newPosition
+                
+                print("🐱 Cat \(entityId) moved from \(currentPosition) to \(newPosition)")
+            } else {
+                print("🐱 Cat \(entityId) has no significant velocity, not moving")
+            }
+        }
+        
+        // Update transform component with current position (don't override physics)
+        transformComponent.position = realityEntity.position
+        componentManager.addComponent(transformComponent, to: entityId)
+    }
+    
+    /// Check if cat has caught the player
+    func checkCatPlayerCollision(catEntityId: UUID, playerEntityId: UUID) -> Bool {
+        guard let catTransform = componentManager.getComponent(TransformComponent.self, for: catEntityId),
+              let playerTransform = componentManager.getComponent(TransformComponent.self, for: playerEntityId) else { return false }
+        
+        let distance = simd_distance(catTransform.position, playerTransform.position)
+        let collisionDistance: Float = 0.5 // Adjust based on entity sizes
+        
+        return distance < collisionDistance
+    }
+}
+
 // CameraSystem removed - using simplified fixed camera approach
 
 // MARK: - ECS World
@@ -277,7 +478,8 @@ class ECSWorld: ObservableObject {
             PhysicsSystem(componentManager: componentManager),
             InputSystem(componentManager: componentManager),
             RenderSystem(componentManager: componentManager),
-            GameLogicSystem(componentManager: componentManager)
+            GameLogicSystem(componentManager: componentManager),
+            AISystem(componentManager: componentManager)
         ]
     }
     
