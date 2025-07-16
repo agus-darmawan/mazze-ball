@@ -198,6 +198,7 @@ struct GameConfiguration {
     let ballRadius: Float
     let exitRadius: Float
     let cameraHeight: Float
+    let cameraHeightMultiplier: Float  // Multiplier to easily adjust zoom level
     let catSleepDuration: TimeInterval
     
     static let `default` = GameConfiguration(
@@ -207,6 +208,7 @@ struct GameConfiguration {
         ballRadius: 0.15,  // Smaller for better proportions
         exitRadius: 0.25,  // Smaller exit
         cameraHeight: 6.0, // Lower camera for smaller mazes
+        cameraHeightMultiplier: 1.5, // ADJUST THIS VALUE: 1.0=normal, 2.0=zoom out, 0.5=zoom in
         catSleepDuration: 2.0
     )
     
@@ -218,6 +220,7 @@ struct GameConfiguration {
         ballRadius: 0.12,
         exitRadius: 0.2,
         cameraHeight: 5.0,
+        cameraHeightMultiplier: 1.5,
         catSleepDuration: 2.0
     )
     
@@ -229,6 +232,7 @@ struct GameConfiguration {
         ballRadius: 0.15,
         exitRadius: 0.25,
         cameraHeight: 6.5,
+        cameraHeightMultiplier: 1.5,
         catSleepDuration: 2.0
     )
     
@@ -240,6 +244,7 @@ struct GameConfiguration {
         ballRadius: 0.2,
         exitRadius: 0.3,
         cameraHeight: 10.0,
+        cameraHeightMultiplier: 1.0,
         catSleepDuration: 2.0
     )
     

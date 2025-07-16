@@ -47,6 +47,6 @@ protocol EntityFactoryProtocol {
 
 /// Protocol defining the interface for camera management
 protocol CameraServiceProtocol: ObservableObject {
-    func setupCamera(mazeSize: SIMD2<Int>, cellSize: Float) -> Entity
+    func setupCamera(mazeSize: SIMD2<Int>, cellSize: Float, gameConfiguration: GameConfiguration) -> Entity
     func updateCameraPosition(following entity: Entity?)
 } 

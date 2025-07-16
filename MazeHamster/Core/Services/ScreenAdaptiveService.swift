@@ -87,15 +87,15 @@ class ScreenAdaptiveService: BaseService {
         var cameraHeight: Float {
             switch self {
             case .phone:
-                return 6.0          // Lower camera for small mazes
+                return 12.0         // Much higher camera for better overview on phones
             case .phonePlus:
-                return 7.0          // Medium camera height
+                return 13.0         // Much higher camera for larger phones
             case .pad:
                 return 8.0          // Higher camera for larger mazes
             case .padPro:
                 return 10.0         // Highest camera for biggest mazes
             case .unknown:
-                return 6.0          // Default
+                return 12.0         // Default to much higher camera
             }
         }
     }
@@ -263,6 +263,7 @@ class ScreenAdaptiveService: BaseService {
             ballRadius: 0.15,  // Slightly smaller ball
             exitRadius: 0.25,  // Slightly smaller exit
             cameraHeight: cameraHeight,
+            cameraHeightMultiplier: 0.5, // ADJUST THIS VALUE: 1.0=normal, 2.0=zoom out, 0.5=zoom in
             catSleepDuration: 2.0
         )
     }

@@ -20,19 +20,19 @@ class CameraService: BaseService, CameraServiceProtocol {
     
     // MARK: - Protocol Methods
     
-    func setupCamera(mazeSize: SIMD2<Int>, cellSize: Float) -> Entity {
+    func setupCamera(mazeSize: SIMD2<Int>, cellSize: Float, gameConfiguration: GameConfiguration) -> Entity {
         let camera = Entity()
         camera.name = "MainCamera"
         
         // Setup camera component
         var cameraComponent = PerspectiveCameraComponent()
         cameraComponent.near = 1.0
-        cameraComponent.far = 1000.0
+//        cameraComponent.far = 1500.0
         cameraComponent.fieldOfViewInDegrees = 45.0
         camera.components.set(cameraComponent)
         
         // Calculate optimal camera position based on maze size
-        let cameraPosition = calculateOptimalCameraPosition(mazeSize: mazeSize, cellSize: cellSize)
+        let cameraPosition = calculateOptimalCameraPosition(mazeSize: mazeSize, cellSize: cellSize, gameConfiguration: gameConfiguration)
         let lookAtPosition = calculateLookAtPosition(mazeSize: mazeSize, cellSize: cellSize)
         
         // Set camera position and orientation
@@ -53,15 +53,16 @@ class CameraService: BaseService, CameraServiceProtocol {
     
     // MARK: - Private Methods
     
-    private func calculateOptimalCameraPosition(mazeSize: SIMD2<Int>, cellSize: Float) -> SIMD3<Float> {
+    private func calculateOptimalCameraPosition(mazeSize: SIMD2<Int>, cellSize: Float, gameConfiguration: GameConfiguration) -> SIMD3<Float> {
         let mazeCenterX = Float(mazeSize.x - 1) * cellSize * 0.5
         let mazeCenterZ = Float(mazeSize.y - 1) * cellSize * 0.5
         
         // Calculate height based on maze size to ensure full view and proper centering
         let maxDimension = max(Float(mazeSize.x), Float(mazeSize.y))
-        let cameraHeight = maxDimension * cellSize * 1.2 + gameConfig.cameraHeight
-        
-        return SIMD3<Float>(mazeCenterX, cameraHeight, mazeCenterZ)
+        let baseCameraHeight = maxDimension * cellSize * 1.2 + (gameConfiguration.cameraHeight)
+        let finalCameraHeight = baseCameraHeight * gameConfiguration.cameraHeightMultiplier
+        print("Camera Height - Base: \(baseCameraHeight), Multiplier: \(gameConfiguration.cameraHeightMultiplier), Final: \(finalCameraHeight)")
+        return SIMD3<Float>(mazeCenterX, finalCameraHeight, mazeCenterZ)
     }
     
     private func calculateLookAtPosition(mazeSize: SIMD2<Int>, cellSize: Float) -> SIMD3<Float> {
