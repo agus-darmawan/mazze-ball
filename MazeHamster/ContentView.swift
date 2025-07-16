@@ -40,6 +40,9 @@ struct ContentView: View {
             // Initialize the game scene through ViewModel
             let scene = gameViewModel.initializeScene()
             content.add(scene)
+        } update: { content in
+            // Update the game on each frame
+            gameViewModel.updateGame(deltaTime: 1.0/60.0)
         }
         .realityViewCameraControls(.none)  // Disable camera controls to prevent interference
         .disabled(gameViewModel.isLoading)

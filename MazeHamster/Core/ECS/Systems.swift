@@ -2,6 +2,7 @@ import Foundation
 import RealityKit
 import simd
 import CoreMotion
+import GameplayKit
 
 // MARK: - ECS System Protocol
 
@@ -32,12 +33,12 @@ class PhysicsSystem: GameSystem {
         let physicsEntities = componentManager.getAllEntitiesWithComponent(PhysicsComponent.self)
         
         for entityId in physicsEntities {
-            guard let physicsComponent = componentManager.getComponent(PhysicsComponent.self, for: entityId),
+            guard let _ = componentManager.getComponent(PhysicsComponent.self, for: entityId),
                   let transformComponent = componentManager.getComponent(TransformComponent.self, for: entityId),
                   let realityEntity = realityEntities[entityId] else { continue }
             
             // Update RealityKit entity physics from component
-            if let physicsBody = realityEntity.components[PhysicsBodyComponent.self] {
+            if realityEntity.components[PhysicsBodyComponent.self] != nil {
                 // Sync component data to RealityKit
                 realityEntity.position = transformComponent.position
                 realityEntity.transform.rotation = transformComponent.rotation
@@ -62,7 +63,7 @@ class PhysicsSystem: GameSystem {
         // Apply force to RealityKit entity by modifying transform
         let currentTransform = realityEntity.transform
         let newPosition = currentTransform.translation + force * 0.016 // Assuming 60fps
-        realityEntity.move(to: Transform(scale: currentTransform.scale, rotation: currentTransform.rotation, translation: newPosition), 
+        realityEntity.move(to: Transform(scale: currentTransform.scale, rotation: currentTransform.rotation, translation: newPosition),
                           relativeTo: realityEntity.parent)
     }
 }
@@ -258,17 +259,370 @@ class GameLogicSystem: GameSystem {
     }
 }
 
+/// System for handling AI agent behavior
+/// System for handling AI agent behavior with pathfinding
+/// Enhanced System for handling AI agent behavior with proper pathfinding
+class AISystem: GameSystem {
+    let componentManager: ComponentManager
+    private var realityEntities: [UUID: Entity] = [:]
+    private var agentSystem: GKComponentSystem<GKAgent3D>
+    private var pathfindingService: PathfindingService
+    private var gameStartTime: Date?
+    private var catSpawnDelay: TimeInterval = 2.0 // Cat spawns after 2 seconds
+    private var sceneEntity: Entity?
+    
+    init(componentManager: ComponentManager, pathfindingService: PathfindingService) {
+        self.componentManager = componentManager
+        self.agentSystem = GKComponentSystem(componentClass: GKAgent3D.self)
+        self.pathfindingService = pathfindingService
+    }
+    
+    func initialize() {
+        gameStartTime = Date()
+        print("🤖 Enhanced AI System with pathfinding initialized")
+    }
+    
+    func update(deltaTime: TimeInterval) {
+        let aiEntities = componentManager.getAllEntitiesWithComponent(AIAgentComponent.self)
+        
+        // Check if cat should start moving (after spawn delay)
+        let timeSinceStart = Date().timeIntervalSince(gameStartTime ?? Date())
+        let shouldCatBeActive = timeSinceStart >= catSpawnDelay
+        
+        for entityId in aiEntities {
+            guard var aiComponent = componentManager.getComponent(AIAgentComponent.self, for: entityId),
+                  var transformComponent = componentManager.getComponent(TransformComponent.self, for: entityId),
+                  var pathfindingComponent = componentManager.getComponent(PathfindingComponent.self, for: entityId) else { continue }
+            
+            // Don't activate cat until spawn delay has passed
+            if !shouldCatBeActive {
+                print("😴 Cat waiting for spawn delay: \(String(format: "%.1f", catSpawnDelay - timeSinceStart))s remaining")
+                continue
+            }
+            
+            // Handle sleep state (initial sleep after spawn delay)
+            if aiComponent.isSleeping {
+                if aiComponent.isSleepFinished() {
+                    aiComponent.wakeUp()
+                    componentManager.addComponent(aiComponent, to: entityId)
+                    print("🐱 Cat \(entityId) woke up and started pathfinding!")
+                    
+                    // Clear any existing path visualization and start fresh
+                    pathfindingService.clearPathVisualization()
+                } else {
+                    let remainingSleep = aiComponent.sleepDuration - (aiComponent.sleepStartTime?.timeIntervalSinceNow ?? 0)
+                    print("😴 Cat \(entityId) still sleeping for \(String(format: "%.1f", remainingSleep))s")
+                    continue
+                }
+            }
+            
+            // Update agent position
+            let currentPosition = transformComponent.position
+            aiComponent.agent.position = vector_float3(currentPosition)
+            
+            // Get target position
+            guard let targetId = aiComponent.targetEntityId,
+                  let targetTransform = componentManager.getComponent(TransformComponent.self, for: targetId) else {
+                print("⚠️ Cat \(entityId) has no target or target not found")
+                continue
+            }
+            
+            let targetPosition = targetTransform.position
+            
+            // Update pathfinding with enhanced system
+            updateEnhancedPathfinding(
+                for: entityId,
+                aiComponent: &aiComponent,
+                pathfindingComponent: &pathfindingComponent,
+                currentPosition: currentPosition,
+                targetPosition: targetPosition
+            )
+            
+            // Move along path with enhanced movement
+            moveAlongEnhancedPath(
+                for: entityId,
+                aiComponent: &aiComponent,
+                pathfindingComponent: &pathfindingComponent,
+                transformComponent: &transformComponent,
+                deltaTime: deltaTime
+            )
+            
+            // Update components
+            componentManager.addComponent(aiComponent, to: entityId)
+            componentManager.addComponent(pathfindingComponent, to: entityId)
+            componentManager.addComponent(transformComponent, to: entityId)
+        }
+    }
+    
+    func shutdown() {
+        pathfindingService.clearPathVisualization()
+        realityEntities.removeAll()
+        print("🤖 Enhanced AI System shut down")
+    }
+    
+    /// Register a RealityKit entity with the AI system
+    func registerEntity(_ entity: Entity, with entityId: UUID) {
+        realityEntities[entityId] = entity
+    }
+    
+    /// Set scene entity for path visualization
+    func setSceneEntity(_ scene: Entity) {
+        sceneEntity = scene
+    }
+    
+    /// Set up chase behavior for a cat entity
+    func setupChaseForCat(catEntityId: UUID, targetEntityId: UUID) {
+        guard var aiComponent = componentManager.getComponent(AIAgentComponent.self, for: catEntityId) else { return }
+        
+        // Set the target
+        aiComponent.targetEntityId = targetEntityId
+        
+        // Start the cat in sleeping state (will activate after spawn delay)
+        aiComponent.startSleep()
+        
+        // Update the component
+        componentManager.addComponent(aiComponent, to: catEntityId)
+        
+        print("🐱 Chase behavior set up for cat - will start after \(catSpawnDelay)s spawn delay + \(aiComponent.sleepDuration)s sleep")
+    }
+    
+    /// Reset game timing (call when game restarts)
+    func resetGameTiming() {
+        gameStartTime = Date()
+        pathfindingService.clearPathVisualization()
+        print("⏰ AI System timing reset")
+    }
+    
+    // MARK: - Enhanced Pathfinding Logic
+    
+    private func updateEnhancedPathfinding(
+        for entityId: UUID,
+        aiComponent: inout AIAgentComponent,
+        pathfindingComponent: inout PathfindingComponent,
+        currentPosition: SIMD3<Float>,
+        targetPosition: SIMD3<Float>
+    ) {
+        let distanceToTarget = simd_distance(currentPosition, targetPosition)
+        
+        // Check if we need to recalculate path
+        let shouldRecalculatePath =
+            !pathfindingComponent.isFollowingPath || // No current path
+            pathfindingComponent.currentPath.isEmpty || // Empty path
+            hasTargetMovedSignificantly(currentPath: pathfindingComponent.currentPath, targetPosition: targetPosition) ||
+            hasReachedEndOfPath(pathfindingComponent: pathfindingComponent)
+        
+        if shouldRecalculatePath {
+            print("🔄 Recalculating path for cat \(entityId)")
+            print("   Current: \(currentPosition)")
+            print("   Target: \(targetPosition)")
+            print("   Distance: \(distanceToTarget)")
+            
+            // Find new path using enhanced pathfinding
+            let newPath = pathfindingService.findPath(from: currentPosition, to: targetPosition)
+            
+            if !newPath.isEmpty {
+                pathfindingComponent.currentPath = newPath
+                pathfindingComponent.currentPathIndex = 0
+                pathfindingComponent.isFollowingPath = true
+                
+                // Visualize the path
+                if let scene = sceneEntity {
+                    pathfindingService.visualizePath(newPath, in: scene)
+                }
+                
+                print("🗺️ Cat \(entityId) found new path with \(newPath.count) waypoints")
+                print("   Path preview: \(newPath.prefix(3).map { "(\(String(format: "%.1f", $0.x)),\(String(format: "%.1f", $0.z)))" })")
+            } else {
+                // No path found, stop following path
+                pathfindingComponent.isFollowingPath = false
+                pathfindingService.clearPathVisualization()
+                print("⚠️ Cat \(entityId) couldn't find path to target")
+            }
+        }
+    }
+    
+    private func moveAlongEnhancedPath(
+        for entityId: UUID,
+        aiComponent: inout AIAgentComponent,
+        pathfindingComponent: inout PathfindingComponent,
+        transformComponent: inout TransformComponent,
+        deltaTime: TimeInterval
+    ) {
+        guard pathfindingComponent.isFollowingPath && !pathfindingComponent.currentPath.isEmpty else {
+            return
+        }
+        
+        guard let realityEntity = realityEntities[entityId] else {
+            print("⚠️ No reality entity found for cat \(entityId)")
+            return
+        }
+        
+        let currentPosition = transformComponent.position
+        let currentWaypointIndex = pathfindingComponent.currentPathIndex
+        
+        // Check if we've reached the end of the path
+        if currentWaypointIndex >= pathfindingComponent.currentPath.count {
+            pathfindingComponent.isFollowingPath = false
+            pathfindingService.clearPathVisualization()
+            print("🎯 Cat \(entityId) completed path")
+            return
+        }
+        
+        let targetWaypoint = pathfindingComponent.currentPath[currentWaypointIndex]
+        let distanceToWaypoint = simd_distance(currentPosition, targetWaypoint)
+        
+        print("🚶 Cat \(entityId) moving to waypoint \(currentWaypointIndex): \(targetWaypoint)")
+        print("   Current pos: \(currentPosition)")
+        print("   Distance to waypoint: \(distanceToWaypoint)")
+        
+        // Check if we've reached the current waypoint
+        if distanceToWaypoint < 0.4 { // Waypoint reached threshold
+            pathfindingComponent.currentPathIndex += 1
+            print("✅ Cat \(entityId) reached waypoint \(currentWaypointIndex)")
+            
+            // Check if we've reached the final waypoint
+            if pathfindingComponent.currentPathIndex >= pathfindingComponent.currentPath.count {
+                pathfindingComponent.isFollowingPath = false
+                pathfindingService.clearPathVisualization()
+                print("🎯 Cat \(entityId) reached final destination")
+                return
+            }
+        }
+        
+        // Move towards current waypoint with enhanced movement
+        let nextWaypoint = pathfindingComponent.currentPath[pathfindingComponent.currentPathIndex]
+        moveTowardsWaypointEnhanced(
+            entity: realityEntity,
+            from: currentPosition,
+            to: nextWaypoint,
+            speed: aiComponent.maxSpeed,
+            deltaTime: Float(deltaTime)
+        )
+        
+        // Update transform component
+        transformComponent.position = realityEntity.position
+    }
+    
+    private func moveTowardsWaypointEnhanced(
+        entity: Entity,
+        from currentPosition: SIMD3<Float>,
+        to targetPosition: SIMD3<Float>,
+        speed: Float,
+        deltaTime: Float
+    ) {
+        // Calculate direction to target
+        let direction = targetPosition - currentPosition
+        let distance = length(direction)
+        
+        guard distance > 0.01 else {
+            print("🎯 Cat too close to waypoint, not moving")
+            return
+        }
+        
+        // Normalize direction
+        let normalizedDirection = direction / distance
+        
+        // Calculate movement with speed limiting
+        let maxMoveDistance = speed * deltaTime
+        let moveDistance = min(maxMoveDistance, distance) // Don't overshoot
+        let movement = normalizedDirection * moveDistance
+        
+        // Apply movement
+        let newPosition = currentPosition + movement
+        entity.position = newPosition
+        
+        print("🚶 Cat enhanced movement:")
+        print("   From: (\(String(format: "%.2f", currentPosition.x)), \(String(format: "%.2f", currentPosition.z)))")
+        print("   To: (\(String(format: "%.2f", newPosition.x)), \(String(format: "%.2f", newPosition.z)))")
+        print("   Target: (\(String(format: "%.2f", targetPosition.x)), \(String(format: "%.2f", targetPosition.z)))")
+        print("   Move distance: \(String(format: "%.3f", moveDistance))")
+    }
+    
+    private func hasTargetMovedSignificantly(currentPath: [SIMD3<Float>], targetPosition: SIMD3<Float>) -> Bool {
+        guard !currentPath.isEmpty else { return true }
+        
+        // Check if target has moved significantly from the path's destination
+        let pathDestination = currentPath.last!
+        let distanceToPathDestination = simd_distance(targetPosition, pathDestination)
+        
+        let significantMoveThreshold: Float = 0.8
+        let hasMoved = distanceToPathDestination > significantMoveThreshold
+        
+        if hasMoved {
+            print("🎯 Target moved significantly: \(distanceToPathDestination) > \(significantMoveThreshold)")
+        }
+        
+        return hasMoved
+    }
+    
+    private func hasReachedEndOfPath(pathfindingComponent: PathfindingComponent) -> Bool {
+        return pathfindingComponent.currentPathIndex >= pathfindingComponent.currentPath.count
+    }
+    
+    /// Check if cat has caught the player
+    func checkCatPlayerCollision(catEntityId: UUID, playerEntityId: UUID) -> Bool {
+        guard let catTransform = componentManager.getComponent(TransformComponent.self, for: catEntityId),
+              let playerTransform = componentManager.getComponent(TransformComponent.self, for: playerEntityId) else { return false }
+        
+        let distance = simd_distance(catTransform.position, playerTransform.position)
+        let collisionDistance: Float = 0.6 // Collision radius
+        
+        if distance < collisionDistance {
+            print("💥 Cat caught player! Distance: \(String(format: "%.2f", distance))")
+            pathfindingService.clearPathVisualization() // Clear path when game ends
+            return true
+        }
+        
+        return false
+    }
+    
+    // MARK: - Debug Methods
+    
+    func getAIDebugInfo() -> String {
+        let timeSinceStart = Date().timeIntervalSince(gameStartTime ?? Date())
+        let shouldCatBeActive = timeSinceStart >= catSpawnDelay
+        
+        var info = "=== AI Debug Info ===\n"
+        info += "Time Since Start: \(String(format: "%.1f", timeSinceStart))s\n"
+        info += "Cat Spawn Delay: \(catSpawnDelay)s\n"
+        info += "Cat Should Be Active: \(shouldCatBeActive)\n"
+        
+        let aiEntities = componentManager.getAllEntitiesWithComponent(AIAgentComponent.self)
+        info += "AI Entities: \(aiEntities.count)\n"
+        
+        for entityId in aiEntities {
+            if let aiComponent = componentManager.getComponent(AIAgentComponent.self, for: entityId),
+               let pathComponent = componentManager.getComponent(PathfindingComponent.self, for: entityId) {
+                info += "\nCat \(entityId):\n"
+                info += "  Sleeping: \(aiComponent.isSleeping)\n"
+                info += "  Following Path: \(pathComponent.isFollowingPath)\n"
+                info += "  Path Length: \(pathComponent.currentPath.count)\n"
+                info += "  Current Waypoint: \(pathComponent.currentPathIndex)\n"
+            }
+        }
+        
+        return info
+    }
+    
+    func setCatSpawnDelay(_ delay: TimeInterval) {
+        catSpawnDelay = delay
+        print("⏰ Cat spawn delay set to \(delay)s")
+    }
+}
 // CameraSystem removed - using simplified fixed camera approach
 
 // MARK: - ECS World
 
 /// Main ECS world that manages all systems and components
+/// Main ECS world that manages all systems and components with pathfinding support
 class ECSWorld: ObservableObject {
     let componentManager = ComponentManager()
     private var systems: [GameSystem] = []
     private var isRunning = false
+    private let pathfindingService: PathfindingService
     
-    init() {
+    init(pathfindingService: PathfindingService) {
+        self.pathfindingService = pathfindingService
         setupSystems()
     }
     
@@ -277,7 +631,10 @@ class ECSWorld: ObservableObject {
             PhysicsSystem(componentManager: componentManager),
             InputSystem(componentManager: componentManager),
             RenderSystem(componentManager: componentManager),
-            GameLogicSystem(componentManager: componentManager)
+            GameLogicSystem(componentManager: componentManager),
+            AISystem(componentManager: componentManager, pathfindingService: pathfindingService),
+            CollectibleSystem(componentManager: componentManager)
+            
         ]
     }
     
@@ -287,6 +644,7 @@ class ECSWorld: ObservableObject {
             system.initialize()
         }
         isRunning = true
+        print("🌍 ECS World with pathfinding initialized")
     }
     
     /// Update all systems
@@ -304,10 +662,11 @@ class ECSWorld: ObservableObject {
             system.shutdown()
         }
         isRunning = false
+        print("🌍 ECS World shut down")
     }
     
     /// Get a specific system
     func getSystem<T: GameSystem>(_ type: T.Type) -> T? {
         return systems.first { $0 is T } as? T
     }
-} 
+}
