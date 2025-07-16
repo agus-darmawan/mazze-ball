@@ -1,3 +1,11 @@
+//
+//  PathfindingService.swift
+//  MazeHamster
+//
+//  Created by Darmawan on 16/07/25.
+//
+
+
 import Foundation
 import RealityKit
 import simd

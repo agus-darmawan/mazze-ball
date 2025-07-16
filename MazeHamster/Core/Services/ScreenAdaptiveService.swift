@@ -6,6 +6,14 @@
 //
 
 
+//
+//  ScreenAdaptiveService.swift
+//  MazeHamster
+//
+//  Created by Darmawan on 16/07/25.
+//
+
+
 import Foundation
 import UIKit
 import RealityKit

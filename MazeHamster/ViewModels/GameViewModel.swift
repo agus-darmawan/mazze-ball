@@ -3,7 +3,7 @@ import RealityKit
 import SwiftUI
 import Combine
 
-/// Main ViewModel for the maze game following MVVM architecture
+/// Adaptive ViewModel for the maze game with screen detection and optimal sizing
 class GameViewModel: ObservableObject {
     
     // MARK: - Published Properties
@@ -12,364 +12,326 @@ class GameViewModel: ObservableObject {
     @Published var score: Int = 0
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+    @Published var debugInfo: String = ""
+    @Published var catSpawnCountdown: Int = 0
+    @Published var currentMazeSize: SIMD2<Int> = SIMD2<Int>(6, 8)
+    @Published var adaptiveInfo: String = ""
+    @Published var screenInfo: String = ""
     
-    // MARK: - Services
+    // MARK: - Adaptive Coordinator
     
-    private let inputService: InputService
-    private let physicsService: PhysicsService
-    private let mazeService: MazeService
-    private let gameService: GameService
-    private let cameraService: CameraService
-    private let entityFactory: EntityFactory
-    
-    // MARK: - ECS
-    
-    private let ecsWorld: ECSWorld
+    private let gameCoordinator: GameCoordinator
     
     // MARK: - Game Entities
     
     private var sceneEntity: Entity?
-    private var mazeWorldEntity: Entity?
-    private var ballEntity: Entity?
-    private var cameraEntity: Entity?
-    private var gameEntities: [Entity] = []
-    private var catEntity: Entity?
-    private var catEntityId: UUID?
-    private var ballEntityId: UUID?
     
     // MARK: - Combine
     
     private var cancellables = Set<AnyCancellable>()
-    
-    // MARK: - Configuration
-    
-    private let gameConfiguration = GameConfiguration.default
+    private var countdownTimer: Timer?
     
     // MARK: - Initialization
     
     init() {
-        // Initialize services
-        self.inputService = InputService()
-        self.physicsService = PhysicsService()
-        self.mazeService = MazeService()
-        self.gameService = GameService()
-        self.cameraService = CameraService()
-        self.entityFactory = EntityFactory()
-        
-        // Initialize ECS
-        self.ecsWorld = ECSWorld()
+        // Initialize adaptive game coordinator
+        self.gameCoordinator = GameCoordinator()
         
         setupBindings()
-        setupServices()
         
-        print("🎮 GameViewModel initialized")
+        print("🎮 Adaptive GameViewModel with screen detection initialized")
     }
     
     // MARK: - Setup
     
     private func setupBindings() {
-        // Bind game service state to view model
-        gameService.$gameState
+        // Bind coordinator state to view model
+        gameCoordinator.getGameService().$gameState
             .receive(on: DispatchQueue.main)
             .assign(to: \.gameState, on: self)
             .store(in: &cancellables)
         
-        gameService.$score
+        gameCoordinator.getGameService().$score
             .receive(on: DispatchQueue.main)
             .assign(to: \.score, on: self)
             .store(in: &cancellables)
         
-        // Bind input service to physics updates
-        inputService.tiltData
+        // Bind adaptive properties
+        gameCoordinator.$currentMazeSize
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] tiltData in
-                self?.handleTiltInput(tiltData)
+            .assign(to: \.currentMazeSize, on: self)
+            .store(in: &cancellables)
+        
+        gameCoordinator.$adaptiveInfo
+            .receive(on: DispatchQueue.main)
+            .assign(to: \.adaptiveInfo, on: self)
+            .store(in: &cancellables)
+        
+        // Screen info updates
+        gameCoordinator.getScreenAdaptiveService().$currentScreenInfo
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] screenInfo in
+                self?.updateScreenInfo(screenInfo)
             }
             .store(in: &cancellables)
         
-        // Bind maze service changes
-        mazeService.$maze
-            .receive(on: DispatchQueue.main)
+        // Debug info updates on background queue
+        Timer.publish(every: 2.0, on: .main, in: .common)
+            .autoconnect()
+            .receive(on: DispatchQueue.global(qos: .background))
             .sink { [weak self] _ in
-                self?.handleMazeChanged()
+                self?.updateDebugInfo()
             }
             .store(in: &cancellables)
-    }
-    
-    private func setupServices() {
-        // Setup service dependencies
-        gameService.setMazeService(mazeService)
-        
-        // Initialize ECS world
-        ecsWorld.initialize()
-        
-        print("🛠️ Services configured")
     }
     
     // MARK: - Public Methods
     
-    /// Initialize the game scene
+    /// Initialize the game scene with adaptive sizing
     func initializeScene() -> Entity {
         isLoading = true
         defer { isLoading = false }
         
-        // Create main scene entity
-        let scene = Entity()
-        scene.name = "MazeScene"
+        // Create scene through adaptive coordinator
+        let scene = gameCoordinator.createGameScene()
         sceneEntity = scene
         
-        // Create maze world container
-        let mazeWorld = entityFactory.createContainer(name: "MazeWorld")
-        mazeWorldEntity = mazeWorld
-        
-        // Generate maze entities
-        let mazeEntities = mazeService.createMazeEntities()
-        gameEntities = mazeEntities
-        
-        // Add maze entities to world
-        for entity in mazeEntities {
-            mazeWorld.addChild(entity)
-        }
-        
-        // Setup physics for maze entities
-        setupMazePhysics(entities: mazeEntities)
-        
-        // Create and setup ball
-        let ball = entityFactory.createMazeBall()
-        ballEntity = ball
-        ball.position = mazeService.getStartPosition()
-        
-        // Setup ball physics
-        physicsService.setupBallPhysics(for: ball, withMaterial: gameConfiguration.physicsMaterials.ball)
-        
-        // Create ball entity for ECS tracking
-        ballEntityId = UUID()
-        let ballTransformComponent = TransformComponent(
-            entityId: ballEntityId!,
-            position: ball.position,
-            rotation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
-            scale: SIMD3<Float>(1, 1, 1)
-        )
-        ecsWorld.componentManager.addComponent(ballTransformComponent, to: ballEntityId!)
-        
-        let ballGameEntityComponent = GameEntityComponent(
-            entityId: ballEntityId!,
-            entityType: .ball,
-            isActive: true,
-            isCollectable: false
-        )
-        ecsWorld.componentManager.addComponent(ballGameEntityComponent, to: ballEntityId!)
-        
-        // Create and setup cat
-        let ballStartPosition = mazeService.getStartPosition()
-        let catStartPosition = ballStartPosition + SIMD3<Float>(0.8, 0, 0) // Offset cat to the right of ball
-        
-        let (cat, catId) = entityFactory.createCatWithECS(
-            componentManager: ecsWorld.componentManager,
-            startPosition: catStartPosition,
-            sleepDuration: gameConfiguration.catSleepDuration
-        )
-        
-        catEntity = cat
-        catEntityId = catId
-        
-        // Register cat with AI system
-        if let aiSystem = ecsWorld.getSystem(AISystem.self) {
-            aiSystem.registerEntity(cat, with: catId)
-            aiSystem.setupChaseForCat(catEntityId: catId, targetEntityId: ballEntityId!)
-        }
-        
-        // Register cat with render system
-        if let renderSystem = ecsWorld.getSystem(RenderSystem.self) {
-            renderSystem.registerEntity(cat, with: catId)
-        }
-        
-        // Register cat with physics system
-        if let physicsSystem = ecsWorld.getSystem(PhysicsSystem.self) {
-            physicsSystem.registerEntity(cat, with: catId)
-        }
-        
-        // Create and setup camera
-        let camera = cameraService.setupCamera(
-            mazeSize: SIMD2<Int>(mazeService.maze.configuration.width, mazeService.maze.configuration.height),
-            cellSize: mazeService.maze.configuration.cellSize
-        )
-        cameraEntity = camera
-        
-        // Configure game service
-        gameService.setBallEntity(ball)
-        
-        // Add entities to scene
-        mazeWorld.addChild(ball)
-        mazeWorld.addChild(cat)
-        scene.addChild(mazeWorld)
-        scene.addChild(camera)
-        
-        // Auto-start the game so AI can begin working
+        // Auto-start the game with spawn countdown
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            self.startGame()
+            self.startGameWithCountdown()
         }
         
-        print("🏗️ Scene initialized with \(mazeEntities.count) maze entities")
+        print("🏗️ Adaptive scene initialized")
+        print("   Maze Size: \(currentMazeSize.x)x\(currentMazeSize.y)")
+        
         return scene
     }
     
-    /// Start the game
+    /// Start the game with cat spawn countdown
     func startGame() {
-        inputService.startMonitoring()
-        gameService.startGame()
+        startGameWithCountdown()
+    }
+    
+    private func startGameWithCountdown() {
+        gameCoordinator.startCoordinator()
+        gameCoordinator.getGameService().startGame()
         
-        print("🎮 Game started")
+        // Start countdown for cat spawn
+        startCatSpawnCountdown()
+        
+        print("🎮 Adaptive game started")
+        print("   Screen-optimized maze: \(currentMazeSize.x)x\(currentMazeSize.y)")
     }
     
     /// Pause the game
     func pauseGame() {
-        inputService.stopMonitoring()
-        gameService.pauseGame()
+        gameCoordinator.getGameService().pauseGame()
+        countdownTimer?.invalidate()
+        countdownTimer = nil
         
-        print("⏸️ Game paused")
+        print("⏸️ Adaptive game paused")
     }
     
     /// Resume the game
     func resumeGame() {
-        inputService.startMonitoring()
-        gameService.resumeGame()
+        gameCoordinator.getGameService().resumeGame()
         
-        print("▶️ Game resumed")
+        // Restart countdown if needed
+        if catSpawnCountdown > 0 {
+            startCatSpawnCountdown()
+        }
+        
+        print("▶️ Adaptive game resumed")
     }
     
-    /// Reset the game
+    /// Reset the game with adaptive sizing
     func resetGame() {
-        inputService.stopMonitoring()
-        gameService.resetGame()
+        gameCoordinator.resetGame()
         
-        // Reset ball position
-        ballEntity?.position = mazeService.getStartPosition()
+        // Reset countdown
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        catSpawnCountdown = 0
         
-        // Reset cat position and sleep state
-        resetCatPosition()
-        
-        print("🔄 Game reset")
+        print("🔄 Adaptive game reset")
     }
     
-    /// Generate a new maze
+    /// Generate a new maze with current screen-optimal size
     func generateNewMaze() {
         isLoading = true
         defer { isLoading = false }
         
-        // Stop current game
-        inputService.stopMonitoring()
-        gameService.resetGame()
+        // Stop countdown during maze generation
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        catSpawnCountdown = 0
         
-        // Generate new maze
-        _ = mazeService.generateMaze(
-            width: gameConfiguration.maze.width,
-            height: gameConfiguration.maze.height
-        )
+        // Generate new adaptive maze
+        gameCoordinator.generateNewMaze()
         
-        // Recreate scene will be handled by the maze changed binding
-        print("🌀 New maze generated")
+        print("🌀 New adaptive maze generated: \(currentMazeSize.x)x\(currentMazeSize.y)")
+    }
+    
+    /// Force refresh adaptive configuration (useful on orientation change)
+    func refreshAdaptiveConfiguration() {
+        gameCoordinator.refreshAdaptiveConfiguration()
+        print("🔄 Adaptive configuration refreshed for current screen")
     }
     
     /// Update game (called from view's update loop)
     func updateGame(deltaTime: TimeInterval) {
-        // Update ball position in ECS for AI tracking
-        updateBallPositionForAI()
-        
-        // Sync game state with ECS systems
-        syncGameStateWithECS()
-        
-        // Check cat-player collision
-        checkCatPlayerCollision()
-        
-        // Update ECS world
-        ecsWorld.update(deltaTime: deltaTime)
-        
-        // Update game service
-        gameService.updateGameState()
+        // Update through adaptive coordinator
+        gameCoordinator.updateCoordinator(deltaTime: deltaTime)
     }
     
     /// Handle view appearing
     func viewDidAppear() {
-        // Start any necessary background services
-        print("📱 View appeared")
+        // Refresh adaptive configuration when view appears
+        refreshAdaptiveConfiguration()
+        print("📱 Adaptive view appeared")
     }
     
     /// Handle view disappearing
     func viewWillDisappear() {
-        inputService.stopMonitoring()
-        ecsWorld.shutdown()
-        print("📱 View disappeared")
+        gameCoordinator.stopCoordinator()
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        print("📱 Adaptive view disappeared")
     }
     
-    // MARK: - Private Methods
+    // MARK: - Cat Spawn Countdown
     
-    private func handleTiltInput(_ tiltData: TiltData) {
-        guard gameState == .playing,
-              let ball = ballEntity else { return }
+    private func startCatSpawnCountdown() {
+        catSpawnCountdown = 2 // 2 seconds countdown
         
-        // Apply tilt force only to the ball
-        physicsService.applyTiltToBall(ball, tiltData: tiltData)
-    }
-    
-    private func handleMazeChanged() {
-        // Handle maze changes if needed
-        // This could trigger scene recreation
-        print("🔄 Maze changed - consider scene update")
-    }
-    
-    private func setupMazePhysics(entities: [Entity]) {
-        for entity in entities {
-            if entity.name.contains("Wall") {
-                // Get wall size from model component
-                if let modelComponent = entity.components[ModelComponent.self] {
-                    let boundingBox = modelComponent.mesh.bounds
-                    let size = boundingBox.max - boundingBox.min
-                    physicsService.setupWallPhysics(for: entity, size: size)
-                }
-            } else if entity.name.contains("Floor") {
-                // Get floor size from model component
-                if let modelComponent = entity.components[ModelComponent.self] {
-                    let boundingBox = modelComponent.mesh.bounds
-                    let size = boundingBox.max - boundingBox.min
-                    physicsService.setupFloorPhysics(for: entity, size: size)
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+            
+            DispatchQueue.main.async {
+                if self.catSpawnCountdown > 0 {
+                    self.catSpawnCountdown -= 1
+                    print("🐱 Cat spawning in: \(self.catSpawnCountdown)")
+                } else {
+                    self.catSpawnCountdown = 0
+                    timer.invalidate()
+                    self.countdownTimer = nil
+                    print("🐱 Cat is now active!")
                 }
             }
         }
     }
     
-    // MARK: - Game Actions
+    // MARK: - Screen and Debug Info Updates
     
-    /// Handle game completion
-    private func handleGameCompleted() {
-        inputService.stopMonitoring()
+    private func updateScreenInfo(_ screenInfo: ScreenAdaptiveService.ScreenInfo?) {
+        guard let info = screenInfo else {
+            self.screenInfo = "No screen info available" // ✅ FIXED
+            return
+        }
+
+        var infoText = "📱 Screen Info:\n"
+        infoText += "Device: \(info.deviceType)\n"
+        infoText += "Size: \(Int(info.size.width))x\(Int(info.size.height))\n"
+        infoText += "Orientation: \(info.orientation)\n"
+        infoText += "Optimal Maze: \(info.deviceType.defaultMazeSize.x)x\(info.deviceType.defaultMazeSize.y)\n"
         
-        // Could trigger celebration effects, score saving, etc.
-        print("🎉 Game completed!")
+        self.screenInfo = infoText
+    }
+
+    
+    private func updateDebugInfo() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            var info = "=== Adaptive Debug Info ===\n"
+            info += "Game State: \(self.gameState)\n"
+            info += "Score: \(self.score)\n"
+            info += "Maze Size: \(self.currentMazeSize.x)x\(self.currentMazeSize.y)\n"
+            info += "Cat Spawn Countdown: \(self.catSpawnCountdown)s\n"
+            
+            // Add adaptive coordinator debug info
+            info += "\n" + self.gameCoordinator.getAdaptiveDebugInfo()
+            
+            self.debugInfo = info
+        }
     }
     
-    /// Handle game failure
-    private func handleGameFailed() {
-        inputService.stopMonitoring()
+    // MARK: - Adaptive Controls
+    
+    /// Test different maze sizes (for debugging)
+    func testMazeSize(_ size: MazeSizePreset) {
+        let config: GameConfiguration
         
-        // Could trigger failure effects, restart prompt, etc.
-        print("💥 Game failed!")
+        switch size {
+        case .small:
+            config = .phone
+        case .medium:
+            config = .phonePlus
+        case .large:
+            config = .tablet
+        }
+        
+        gameCoordinator.updateConfiguration(config)
+        generateNewMaze()
+        
+        print("🧪 Testing maze size: \(size)")
+    }
+    
+    /// Get available maze size options based on current screen
+    func getAvailableMazeSizes() -> [MazeSizeOption] {
+        guard let screenInfo = gameCoordinator.getScreenAdaptiveService().getScreenInfo() else {
+            return [MazeSizeOption(name: "Default", size: SIMD2<Int>(6, 8))]
+        }
+        
+        switch screenInfo.deviceType {
+        case .phone:
+            return [
+                MazeSizeOption(name: "Tiny", size: SIMD2<Int>(4, 6)),
+                MazeSizeOption(name: "Small", size: SIMD2<Int>(5, 7)),
+                MazeSizeOption(name: "Optimal", size: SIMD2<Int>(6, 8))
+            ]
+        case .phonePlus:
+            return [
+                MazeSizeOption(name: "Small", size: SIMD2<Int>(5, 7)),
+                MazeSizeOption(name: "Optimal", size: SIMD2<Int>(7, 9)),
+                MazeSizeOption(name: "Large", size: SIMD2<Int>(8, 10))
+            ]
+        case .pad, .padPro:
+            return [
+                MazeSizeOption(name: "Medium", size: SIMD2<Int>(7, 9)),
+                MazeSizeOption(name: "Large", size: SIMD2<Int>(10, 12)),
+                MazeSizeOption(name: "Huge", size: SIMD2<Int>(12, 15))
+            ]
+        case .unknown:
+            return [MazeSizeOption(name: "Default", size: SIMD2<Int>(6, 8))]
+        }
     }
     
     // MARK: - Error Handling
     
     private func handleError(_ error: Error) {
-        errorMessage = error.localizedDescription
-        print("❌ Error: \(error)")
+        DispatchQueue.main.async { [weak self] in
+            self?.errorMessage = error.localizedDescription
+            print("❌ Adaptive Error: \(error)")
+        }
+    }
+    
+    private func clearError() {
+        DispatchQueue.main.async { [weak self] in
+            self?.errorMessage = nil
+        }
     }
     
     // MARK: - Cleanup
     
     deinit {
-        inputService.stopMonitoring()
-        ecsWorld.shutdown()
+        gameCoordinator.stopCoordinator()
+        countdownTimer?.invalidate()
         cancellables.removeAll()
-        print("🧹 GameViewModel deallocated")
+        print("🧹 Adaptive GameViewModel deallocated")
     }
 }
 
@@ -405,78 +367,256 @@ extension GameViewModel {
         return gameState == .paused
     }
     
-    // MARK: - Private Helper Methods
+    var gameStateDescription: String {
+        switch gameState {
+        case .menu: return "Ready to Start"
+        case .playing:
+            if catSpawnCountdown > 0 {
+                return "Playing - Cat spawning in \(catSpawnCountdown)s"
+            } else {
+                return "Playing - Cat Active!"
+            }
+        case .paused: return "Paused"
+        case .completed: return "Completed!"
+        case .failed: return "Game Over"
+        }
+    }
     
-    /// Update ball position in ECS for AI tracking
-    private func updateBallPositionForAI() {
-        guard let ballEntityId = ballEntityId,
-              let ballEntity = ballEntity else { return }
-        
-        // Update ball's transform component with current position
-        if var ballTransform = ecsWorld.componentManager.getComponent(TransformComponent.self, for: ballEntityId) {
-            ballTransform.position = ballEntity.position
-            ballTransform.rotation = ballEntity.transform.rotation
-            ecsWorld.componentManager.addComponent(ballTransform, to: ballEntityId)
-            
-            // Debug print for ball position updates
-            if abs(ballTransform.position.x) > 0.1 || abs(ballTransform.position.z) > 0.1 {
-                print("🎯 Ball position updated: \(ballTransform.position)")
+    var adaptiveStatusDescription: String {
+        return "Maze: \(currentMazeSize.x)×\(currentMazeSize.y) (Screen Optimized)"
+    }
+    
+    var catStatusDescription: String {
+        switch gameState {
+        case .menu, .paused, .completed, .failed:
+            return "Cat Inactive"
+        case .playing:
+            if catSpawnCountdown > 0 {
+                return "Cat spawning in \(catSpawnCountdown)s"
+            } else {
+                return "Cat is hunting!"
             }
         }
     }
     
-    /// Sync game state with ECS systems
-    private func syncGameStateWithECS() {
-        // Update GameLogicSystem with current game state
-        if let gameLogicSystem = ecsWorld.getSystem(GameLogicSystem.self) {
-            gameLogicSystem.setGameState(gameState)
+    var gameInstructions: String {
+        switch gameState {
+        case .menu:
+            return "Tilt your device to move the ball through the \(currentMazeSize.x)×\(currentMazeSize.y) maze"
+        case .playing:
+            if catSpawnCountdown > 0 {
+                return "Get ready! Cat will start chasing you in \(catSpawnCountdown) seconds"
+            } else {
+                return "Avoid the cat and reach the exit!"
+            }
+        case .paused:
+            return "Game paused"
+        case .completed:
+            return "Congratulations! You escaped the \(currentMazeSize.x)×\(currentMazeSize.y) maze!"
+        case .failed:
+            return "Game Over! The cat caught you in the \(currentMazeSize.x)×\(currentMazeSize.y) maze"
         }
     }
     
-    /// Check if cat has caught the player
-    private func checkCatPlayerCollision() {
-        guard let catEntityId = catEntityId,
-              let ballEntityId = ballEntityId,
-              let aiSystem = ecsWorld.getSystem(AISystem.self) else { return }
-        
-        if aiSystem.checkCatPlayerCollision(catEntityId: catEntityId, playerEntityId: ballEntityId) {
-            // Cat caught the player - game over
-            gameService.setGameState(.failed)
-            print("🐱 Cat caught the player! Game Over!")
-        }
+    var showCatCountdown: Bool {
+        return gameState == .playing && catSpawnCountdown > 0
     }
     
-    /// Reset cat position and sleep state
-    private func resetCatPosition() {
-        guard let catEntityId = catEntityId,
-              let catEntity = catEntity else { return }
+    var catCountdownText: String {
+        return "Cat spawning in \(catSpawnCountdown)s"
+    }
+    
+    var shouldShowPathVisualization: Bool {
+        return gameState == .playing && catSpawnCountdown == 0
+    }
+}
+
+// MARK: - Adaptive UI Properties
+
+extension GameViewModel {
+    
+    /// Get UI scaling factor for current screen
+    var uiScalingFactor: Float {
+        return gameCoordinator.getScreenAdaptiveService().getUIScalingFactor()
+    }
+    
+    /// Get optimal button size for current screen
+    var buttonSize: CGSize {
+        let baseSizes = CGSize(width: 80, height: 44)
+        let scale = CGFloat(uiScalingFactor)
+        return CGSize(width: baseSizes.width * scale, height: baseSizes.height * scale)
+    }
+    
+    /// Get optimal font size for current screen
+    var fontSize: CGFloat {
+        let baseSize: CGFloat = 16
+        return baseSize * CGFloat(uiScalingFactor)
+    }
+    
+    /// Get adaptive colors based on screen size
+    var adaptiveColors: AdaptiveColors {
+        guard let screenInfo = gameCoordinator.getScreenAdaptiveService().getScreenInfo() else {
+            return AdaptiveColors.default
+        }
         
-        let ballStartPosition = mazeService.getStartPosition()
-        let catStartPosition = ballStartPosition + SIMD3<Float>(0.8, 0, 0) // Offset cat to the right of ball
-        catEntity.position = catStartPosition
-        
-        // Update cat's transform component and restart sleep
-        if var catTransform = ecsWorld.componentManager.getComponent(TransformComponent.self, for: catEntityId),
-           var catAI = ecsWorld.componentManager.getComponent(AIAgentComponent.self, for: catEntityId) {
-            catTransform.position = catStartPosition
-            catAI.startSleep() // Restart sleep when resetting
-            ecsWorld.componentManager.addComponent(catTransform, to: catEntityId)
-            ecsWorld.componentManager.addComponent(catAI, to: catEntityId)
+        switch screenInfo.deviceType {
+        case .phone:
+            return AdaptiveColors.highContrast
+        case .phonePlus:
+            return AdaptiveColors.default
+        case .pad, .padPro:
+            return AdaptiveColors.vibrant
+        case .unknown:
+            return AdaptiveColors.default
         }
     }
 }
 
-// MARK: - Debug Information
+// MARK: - Performance and Analytics
 
 extension GameViewModel {
     
-    func getDebugInfo() -> String {
-        var info = "=== Debug Info ===\n"
-        info += "Game State: \(gameState)\n"
+    func getAdaptivePerformanceMetrics() -> AdaptiveGameMetrics {
+        return AdaptiveGameMetrics(
+            gameState: gameState,
+            score: score,
+            mazeSize: currentMazeSize,
+            catSpawnCountdown: catSpawnCountdown,
+            pathfindingActive: shouldShowPathVisualization,
+            screenOptimized: true,
+            deviceType: gameCoordinator.getScreenAdaptiveService().getScreenInfo()?.deviceType.description ?? "Unknown"
+        )
+    }
+    
+    func logAdaptiveGameEvent(_ event: AdaptiveGameEvent) {
+        let timestamp = Date()
+        let metrics = getAdaptivePerformanceMetrics()
+        print("📊 Adaptive Game Event [\(timestamp)]: \(event)")
+        print("   Metrics: \(metrics)")
+        
+        // Here you could send to analytics service
+        // Analytics.track(event: event, properties: metrics)
+    }
+}
+
+// MARK: - Debug and Testing Methods
+
+extension GameViewModel {
+    
+    func getDetailedAdaptiveDebugInfo() -> String {
+        var info = "=== Detailed Adaptive Debug ===\n"
+        info += "Game State: \(gameState) (\(gameStateDescription))\n"
         info += "Score: \(score)\n"
-        info += "Ball Position: \(ballEntity?.position ?? SIMD3<Float>(0, 0, 0))\n"
-        info += "Maze Size: \(mazeService.maze.configuration.width)x\(mazeService.maze.configuration.height)\n"
-        info += "Entities Count: \(gameEntities.count)\n"
+        info += "Maze Size: \(currentMazeSize.x)×\(currentMazeSize.y)\n"
+        info += "Loading: \(isLoading)\n"
+        info += "Cat Spawn Countdown: \(catSpawnCountdown)s\n"
+        
+        if let error = errorMessage {
+            info += "Error: \(error)\n"
+        }
+        
+        // Screen information
+        info += "\n--- Screen Info ---\n"
+        info += screenInfo
+        
+        // Adaptive coordinator debug info
+        info += "\n" + gameCoordinator.getAdaptiveDebugInfo()
+        
         return info
     }
-} 
+    
+    /// Test different screen configurations (for debugging)
+    func simulateDeviceType(_ deviceType: ScreenAdaptiveService.DeviceType) {
+        // This would be used for testing different configurations
+        print("🧪 Simulating device type: \(deviceType)")
+        
+        let testConfig: GameConfiguration
+        switch deviceType {
+        case .phone:
+            testConfig = .phone
+        case .phonePlus:
+            testConfig = .phonePlus
+        case .pad, .padPro:
+            testConfig = .tablet
+        case .unknown:
+            testConfig = .default
+        }
+        
+        gameCoordinator.updateConfiguration(testConfig)
+        generateNewMaze()
+    }
+}
+
+// MARK: - Supporting Types
+
+struct AdaptiveGameMetrics {
+    let gameState: GameState
+    let score: Int
+    let mazeSize: SIMD2<Int>
+    let catSpawnCountdown: Int
+    let pathfindingActive: Bool
+    let screenOptimized: Bool
+    let deviceType: String
+}
+
+enum AdaptiveGameEvent {
+    case adaptiveGameStarted(mazeSize: SIMD2<Int>)
+    case screenConfigurationChanged
+    case adaptiveMazeGenerated(size: SIMD2<Int>)
+    case catSpawned
+    case catPathCalculated
+    case playerCaught
+    case levelCompleted(mazeSize: SIMD2<Int>)
+    case gameReset
+}
+
+enum MazeSizePreset {
+    case small, medium, large
+}
+
+struct MazeSizeOption {
+    let name: String
+    let size: SIMD2<Int>
+}
+
+struct AdaptiveColors {
+    let primary: Color
+    let secondary: Color
+    let accent: Color
+    let background: Color
+    
+    static let `default` = AdaptiveColors(
+        primary: .primary,
+        secondary: .secondary,
+        accent: .accentColor,
+        background: .clear
+    )
+    
+    static let highContrast = AdaptiveColors(
+        primary: .black,
+        secondary: .gray,
+        accent: .blue,
+        background: .white
+    )
+    
+    static let vibrant = AdaptiveColors(
+        primary: .primary,
+        secondary: .secondary,
+        accent: .purple,
+        background: .clear
+    )
+}
+
+// MARK: - Extensions for Device Type
+
+extension ScreenAdaptiveService.DeviceType {
+    var description: String {
+        switch self {
+        case .phone: return "iPhone"
+        case .phonePlus: return "iPhone Plus"
+        case .pad: return "iPad"
+        case .padPro: return "iPad Pro"
+        case .unknown: return "Unknown"
+        }
+    }
+}

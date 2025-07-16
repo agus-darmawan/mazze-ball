@@ -185,6 +185,7 @@ enum GameEntityType {
     case camera
     case light
     case cat
+    case collectible
 }
 
 // MARK: - Component Storage
