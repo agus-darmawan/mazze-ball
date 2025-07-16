@@ -409,18 +409,20 @@ class GameCoordinator: ObservableObject {
     private func createAdaptiveCamera() -> Entity {
         let camera = cameraService.setupCamera(
             mazeSize: SIMD2<Int>(gameConfiguration.maze.width, gameConfiguration.maze.height),
-            cellSize: gameConfiguration.maze.cellSize
+            cellSize: gameConfiguration.maze.cellSize,
+            gameConfiguration: gameConfiguration
         )
         
-        // Apply adaptive camera height
-        let adaptiveCameraHeight = screenAdaptiveService.getOptimalCameraHeight()
+        // Keep the camera position from CameraService but ensure proper centering
         let mazeCenter = mazeService.maze.centerPosition
-        let cameraPosition = SIMD3<Float>(mazeCenter.x, adaptiveCameraHeight, mazeCenter.z)
+        let cameraPosition = camera.position // Use position calculated by CameraService
         
-        camera.position = cameraPosition
-        camera.look(at: mazeCenter, from: cameraPosition, relativeTo: nil)
+        // Ensure camera is centered over the maze but keep the height from CameraService
+        let centeredPosition = SIMD3<Float>(mazeCenter.x, cameraPosition.y, mazeCenter.z)
+        camera.position = centeredPosition
+        camera.look(at: mazeCenter, from: centeredPosition, relativeTo: nil)
         
-        print("📷 Adaptive camera created at height: \(adaptiveCameraHeight)")
+        print("📷 Adaptive camera created at position: \(centeredPosition)")
         return camera
     }
     
