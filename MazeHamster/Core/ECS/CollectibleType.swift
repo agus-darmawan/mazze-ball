@@ -1,16 +1,8 @@
 //
-//  CollectibleType.swift
-//  MazeHamster
-//
-//  Created by Darmawan on 16/07/25.
-//
-
-
-//
 //  CollectibleSystem.swift
-//  MazeHamster
+//  MazeBall
 //
-//  Enhanced Maze Feature: Collectible Items System
+//  Maze Feature: Collectible Items System
 //
 
 import Foundation
@@ -250,13 +242,13 @@ class CollectibleSystem: GameSystem {
         return distance < 0.5 // Collision threshold
     }
     
-    // MARK: - Item Collection (FIXED)
+    // MARK: - Item Collection
     
     private func collectItem(ballId: UUID, collectibleId: UUID) {
         guard var collectible = componentManager.getComponent(CollectibleComponent.self, for: collectibleId),
               let realityEntity = realityEntities[collectibleId] else { return }
         
-        // Get or create player status component - FIXED VERSION
+        // Get or create player status component
         var playerStatus: PlayerStatusComponent
         if let existingStatus = componentManager.getComponent(PlayerStatusComponent.self, for: ballId) {
             playerStatus = existingStatus
@@ -382,7 +374,7 @@ struct CollectionProgress {
     }
 }
 
-// MARK: - Enhanced Entity Factory Extension
+// MARK: - Entity Factory Extension
 
 extension EntityFactory {
     

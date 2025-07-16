@@ -427,7 +427,7 @@ class AISystem: GameSystem {
                 
                 // Visualize the path
                 if let scene = sceneEntity {
-                    pathfindingService.visualizePath(newPath, in: scene)
+//                    pathfindingService.visualizePath(newPath, in: scene)
                 }
                 
                 print("🗺️ Cat \(entityId) found new path with \(newPath.count) waypoints")

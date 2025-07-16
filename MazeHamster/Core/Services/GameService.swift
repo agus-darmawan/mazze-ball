@@ -189,8 +189,43 @@ class GameService: BaseService, GameServiceProtocol {
     
     /// Set game state directly
     func setGameState(_ newState: GameState) {
+        let previousState = gameState
         gameState = newState
+        
+        // Handle state transitions
+        handleStateTransition(from: previousState, to: newState)
+        
         print("🎮 Game state changed to: \(newState)")
+    }
+    
+    // MARK: - State Transition Handling
+    
+    private func handleStateTransition(from previousState: GameState, to newState: GameState) {
+        // Handle specific state transitions
+        switch (previousState, newState) {
+        case (_, .completed):
+            // Game completed
+            completeGame()
+            
+        case (_, .failed):
+            // Game failed
+            failGame()
+            
+        case (.paused, .playing):
+            // Resume game
+            resumeGame()
+            
+        case (.playing, .paused):
+            // Pause game
+            pauseGame()
+            
+        case (_, .menu):
+            // Reset to menu
+            resetGame()
+            
+        default:
+            break
+        }
     }
     
     // MARK: - Cleanup
@@ -213,4 +248,4 @@ struct GameStats {
         let seconds = Int(elapsedTime) % 60
         return String(format: "%02d:%02d", minutes, seconds)
     }
-} 
+}
