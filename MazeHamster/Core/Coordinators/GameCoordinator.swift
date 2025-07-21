@@ -47,6 +47,7 @@ class GameCoordinator: ObservableObject {
     // MARK: - Combine
     
     private var cancellables = Set<AnyCancellable>()
+    private var mazeWorldEntity: Entity? // Add this to store reference
     
     // MARK: - Initialization
     
@@ -169,6 +170,23 @@ class GameCoordinator: ObservableObject {
         print("📱 Screen changed - adaptive configuration updated")
     }
     
+    
+    
+    func clearMazeWorldGameAudio() {
+        guard let mazeWorld = mazeWorldEntity else {
+            print("⚠️ No mazeWorld entity reference found")
+            return
+        }
+        
+        // Stop all audio on the mazeWorld entity
+        mazeWorld.stopAllAudio()
+        
+        // Remove the audio channel component
+        mazeWorld.components.remove(ChannelAudioComponent.self)
+        
+        print("🔇 Successfully cleared all game audio from MazeWorld")
+    }
+    
     // MARK: - Enhanced Scene Creation with Collectibles
     
     /// Create a new game scene with adaptive sizing and collectibles
@@ -184,6 +202,7 @@ class GameCoordinator: ObservableObject {
         
         // Create maze world
         let mazeWorld = entityFactory.createContainer(name: "MazeWorld")
+        mazeWorldEntity = mazeWorld // Store reference
         
         // Generate maze entities with adaptive configuration
         let mazeEntities = mazeService.createMazeEntities()
@@ -194,6 +213,14 @@ class GameCoordinator: ObservableObject {
         // Add maze entities to world
         for entity in mazeEntities {
             mazeWorld.addChild(entity)
+        }
+        
+        mazeWorld.channelAudio = ChannelAudioComponent()
+        do {
+            let resource = try AudioFileResource.load(named: "Maze-Runner-Symphony")
+            mazeWorld.playAudio(resource)
+        } catch {
+            fatalError("Failed to create maze world audio channel: \(error)")
         }
         
         // Create collectibles throughout the maze
@@ -786,6 +813,9 @@ class GameCoordinator: ObservableObject {
         // Stop services
         inputService.stopMonitoring()
         gameService.resetGame()
+        
+        // Clear audio when stopping coordinator
+        clearMazeWorldGameAudio()
         
         // Clear pathfinding visualization and cache
         pathfindingService.clearPathVisualization()

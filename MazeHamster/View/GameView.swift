@@ -25,6 +25,21 @@ struct GameView: View {
         .disabled(gameViewModel.isLoading)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .onDisappear {
+            print("GameView disappeared")
+            print("Clearing audio resources...")
+            
+            // Clear audio immediately when view disappears
+            gameViewModel.clearAudio()
+            
+            // Small delay to ensure audio cleanup completes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                gameViewModel.viewWillDisappear()
+            }
+        }
+        .onAppear {
+            print("GAME view rendered")
+        }
     }
 }
 
