@@ -193,21 +193,47 @@ class MazeService: BaseService, MazeServiceProtocol {
     func getCellCoordinate(for worldPosition: SIMD3<Float>) -> SIMD2<Int> {
         let x = Int(worldPosition.x / maze.configuration.cellSize)
         let y = Int(worldPosition.z / maze.configuration.cellSize)
-        return SIMD2<Int>(
-            max(0, min(maze.configuration.width - 1, x)),
-            max(0, min(maze.configuration.height - 1, y))
-        )
+        
+        // Clamp to valid bounds and add logging
+        let clampedX = max(0, min(maze.configuration.width - 1, x))
+        let clampedY = max(0, min(maze.configuration.height - 1, y))
+        
+        let result = SIMD2<Int>(clampedX, clampedY)
+        
+        if x != clampedX || y != clampedY {
+            print("🔧 MazeService: Clamped world position \(worldPosition) from cell (\(x),\(y)) to \(result)")
+        }
+        
+        return result
     }
     
     /// Check if a cell has a wall in the specified direction
     func hasWall(at cellCoordinate: SIMD2<Int>, direction: Wall) -> Bool {
+        // First check if coordinates are within bounds
         guard cellCoordinate.x >= 0 && cellCoordinate.x < maze.configuration.width &&
               cellCoordinate.y >= 0 && cellCoordinate.y < maze.configuration.height else {
+            print("🚫 MazeService: Cell coordinate \(cellCoordinate) out of bounds for maze \(maze.configuration.width)x\(maze.configuration.height)")
+            return true // Out of bounds = wall
+        }
+        
+        // Additional safety check for cells array
+        guard cellCoordinate.x < maze.cells.count &&
+              cellCoordinate.y < maze.cells[cellCoordinate.x].count else {
+            print("🚫 MazeService: Cell coordinate \(cellCoordinate) out of cells array bounds")
             return true // Out of bounds = wall
         }
         
         let cell = maze.cells[cellCoordinate.x][cellCoordinate.y]
-        return cell.walls.contains(direction)
+        let hasWallResult = cell.walls.contains(direction)
+        
+        // Debug logging for wall checking
+        if hasWallResult {
+            print("🧱 Wall found at \(cellCoordinate) direction \(direction)")
+        } else {
+            print("🚪 No wall at \(cellCoordinate) direction \(direction)")
+        }
+        
+        return hasWallResult
     }
     
     /// Get the start position of the maze
@@ -226,4 +252,4 @@ class MazeService: BaseService, MazeServiceProtocol {
         let distance = simd_distance(position, exitPos)
         return distance < threshold
     }
-} 
+}
