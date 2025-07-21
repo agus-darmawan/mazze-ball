@@ -86,6 +86,8 @@ class GameCoordinator: ObservableObject {
         // Update configuration based on screen detection
         updateAdaptiveConfiguration()
         
+        mazeService.setupWithConfiguration(gameConfiguration.maze)
+        
         systemStatus = .ready
         isInitialized = true
         
