@@ -27,12 +27,17 @@ class MazeService: BaseService, MazeServiceProtocol {
     
     // MARK: - Service Setup
     
-    override func setupService() {
-        super.setupService()
-        // Generate initial maze
-        maze = generateMaze(width: configuration.width, height: configuration.height)
-        print("✅ MazeService configured successfully")
+//    override func setupService() {
+//        super.setupService()
+//        // Generate initial maze
+//        maze = generateMaze(width: configuration.width, height: configuration.height)
+//        print("✅ MazeService configured successfully")
+//    }
+    
+    func setupWithConfiguration(_ config: MazeConfiguration) {
+        self.maze = generateMaze(width: config.width, height: config.height)
     }
+
     
     // MARK: - Protocol Methods
     
