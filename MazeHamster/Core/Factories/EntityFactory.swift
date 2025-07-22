@@ -241,9 +241,6 @@ class EntityFactory: EntityFactoryProtocol {
         )
         componentManager.addComponent(renderComponent, to: entityId)
         
-        let catStatusComponent = CatStatusComponent(entityId: entityId)
-                componentManager.addComponent(catStatusComponent, to: entityId)
-        
         print("🐱 Cat entity with ECS components created at position: \(startPosition)")
         return (cat, entityId)
     }

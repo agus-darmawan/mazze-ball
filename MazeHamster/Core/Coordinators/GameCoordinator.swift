@@ -229,6 +229,16 @@ class GameCoordinator: ObservableObject {
             componentManager: ecsWorld.componentManager
         )
         
+        // Register collectibles with collectible system and add to world
+        if let collectibleSystem = ecsWorld.getSystem(CollectibleSystem.self) {
+            for (collectibleEntity, collectibleId) in collectibleEntities {
+                collectibleSystem.registerEntity(collectibleEntity, with: collectibleId)
+                mazeWorld.addChild(collectibleEntity)
+            }
+            collectibleSystem.setGameService(gameService)
+            collectibleSystem.setRequiredKeys(requiredKeysForExit)
+        }
+        
         // Create and setup ball with adaptive sizing
         let ball = createAdaptiveBall()
         mazeWorld.addChild(ball)
@@ -246,23 +256,6 @@ class GameCoordinator: ObservableObject {
         // Add to scene
         scene.addChild(mazeWorld)
         scene.addChild(camera)
-        
-        // Register collectibles with collectible system and add to world
-        if let collectibleSystem = ecsWorld.getSystem(CollectibleSystem.self) {
-            for (collectibleEntity, collectibleId) in collectibleEntities {
-                collectibleSystem.registerEntity(collectibleEntity, with: collectibleId)
-                mazeWorld.addChild(collectibleEntity)
-            }
-            collectibleSystem.setGameService(gameService)
-            collectibleSystem.setRequiredKeys(requiredKeysForExit)
-            
-            if let ballId = self.ballEntityId {
-                            collectibleSystem.setPlayerEntityId(ballId)
-                        }
-                        if let catId = self.catEntityId {
-                            collectibleSystem.setCatEntityId(catId)
-                        }
-        }
         
         systemStatus = .ready
         print("🏗️ Enhanced game scene with collectibles created successfully")
@@ -542,20 +535,9 @@ class GameCoordinator: ObservableObject {
                         grandChild.position = mazeService.getStartPosition()
                         
                         // Reset player status
-                        if let ballEntityId = ballEntityId,
-                           var playerStatus = ecsWorld.componentManager.getComponent(PlayerStatusComponent.self, for: ballEntityId) {
-                            // Mereset semua properti PlayerStatusComponent ke nilai default atau nol
-                            playerStatus.hasSpeedBoost = false
-                            playerStatus.hasShield = false
-                            playerStatus.isSlowMotion = false
-                            playerStatus.collectedKeys = 0
-                            playerStatus.totalCollectibles = 0
-                            playerStatus.speedBoostEndTime = nil
-                            playerStatus.shieldEndTime = nil
-                            playerStatus.slowMotionEndTime = nil
-                            
-                            ecsWorld.componentManager.addComponent(playerStatus, to: ballEntityId)
-                            print("🔄 PlayerStatusComponent reset for ballEntityId: \(ballEntityId)")
+                        if let ballEntityId = ballEntityId {
+                            let resetPlayerStatus = PlayerStatusComponent(entityId: ballEntityId)
+                            ecsWorld.componentManager.addComponent(resetPlayerStatus, to: ballEntityId)
                         }
                         
                     } else if grandChild.name == "CatAgent" {
@@ -581,18 +563,6 @@ class GameCoordinator: ObservableObject {
                             ecsWorld.componentManager.addComponent(catTransform, to: catEntityId)
                             ecsWorld.componentManager.addComponent(catAI, to: catEntityId)
                             ecsWorld.componentManager.addComponent(catPathfinding, to: catEntityId)
-
-                            // === BARIS BARU: Reset CatStatusComponent di sini ===
-                            if var catStatus = ecsWorld.componentManager.getComponent(CatStatusComponent.self, for: catEntityId) {
-                                catStatus.isStunned = false
-                                catStatus.isSpeedBoosted = false
-                                catStatus.speedMultiplier = 1.0 // Reset ke kecepatan normal
-                                catStatus.stunEndTime = nil
-                                catStatus.speedBoostEndTime = nil
-                                ecsWorld.componentManager.addComponent(catStatus, to: catEntityId)
-                                print("🔄 CatStatusComponent reset for catEntityId: \(catEntityId)")
-                            }
-                            // ===================================================
                         }
                         
                     } else if grandChild.name.contains("Collectible") {
@@ -603,13 +573,7 @@ class GameCoordinator: ObservableObject {
                         if let collectibleId = collectibleEntities.first(where: { $0.0 == grandChild })?.1,
                            var collectibleComponent = ecsWorld.componentManager.getComponent(CollectibleComponent.self, for: collectibleId) {
                             collectibleComponent.isCollected = false
-                            collectibleComponent.pulseAnimation = 0.0 // Reset animasi juga agar dimulai dari awal
-                            collectibleComponent.rotationSpeed = 2.0 // Pastikan speed rotasi default
                             ecsWorld.componentManager.addComponent(collectibleComponent, to: collectibleId)
-                            
-                            // Optional: Reset visual scale if it was pulsed and not reset
-                            // grandChild.transform.scale = SIMD3<Float>(1, 1, 1)
-                            print("🔄 Collectible '\(collectibleComponent.collectibleType)' reset for entityId: \(collectibleId)")
                         }
                     }
                 }
@@ -646,9 +610,6 @@ class GameCoordinator: ObservableObject {
         
         var modifiedTiltData = tiltData
         
-        // Dapatkan status pemain terbaru
-        let playerStatus = getPlayerStatus()
-        
         // Check for speed boost effect
         if let playerStatus = getPlayerStatus(), playerStatus.hasSpeedBoost {
             // Increase tilt sensitivity for speed boost
@@ -657,15 +618,6 @@ class GameCoordinator: ObservableObject {
                 pitch: tiltData.pitch * 1.5,
                 timestamp: tiltData.timestamp
             )
-            print("🚀 Player Speed Boost active!")
-        } else if let currentStatus = playerStatus, currentStatus.isSlowMotion { // NEW: Cek efek slow motion
-            // Decrease tilt sensitivity for slow motion
-            modifiedTiltData = TiltData(
-                roll: tiltData.roll * 0.5, // Misalnya, 50% lebih lambat
-                pitch: tiltData.pitch * 0.5,
-                timestamp: tiltData.timestamp
-            )
-            print("🐌 Player Slow Motion active!")
         }
         
         physicsService.applyTiltToBall(ballEntity, tiltData: modifiedTiltData)

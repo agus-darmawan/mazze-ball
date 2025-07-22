@@ -10,53 +10,51 @@ import RealityKit
 import simd
 import SwiftUI
 
-
 // MARK: - Collectible Types
 
 enum CollectibleType: CaseIterable {
     case coin           // Basic points
+    case powerUp        // Temporary speed boost
     case shield         // Temporary cat protection
-    case fish           // biar kucingnya tambah cepat
-    case pillow         // stunt kucing yes
-    case bubbleGum      // melambatkan si hamster
+    case timeBonus      // Extra time or slow down cat
+    case key            // Required to unlock exit
     
     var points: Int {
         switch self {
         case .coin: return 10
-        case .shield: return 0
-        case .fish: return 0
-        case .pillow: return 0
-        case .bubbleGum: return 0
+        case .powerUp: return 25
+        case .shield: return 50
+        case .timeBonus: return 30
+        case .key: return 100
         }
     }
     
     var color: UIColor {
         switch self {
         case .coin: return .systemYellow
+        case .powerUp: return .systemBlue
         case .shield: return .systemGreen
-        case .fish: return .systemRed
-        case .pillow: return .systemBlue
-        case .bubbleGum: return .systemOrange
+        case .timeBonus: return .systemPurple
+        case .key: return .systemOrange
         }
     }
     
     var effectDuration: TimeInterval {
         switch self {
-        case .coin: return 0
-        case .shield: return 7.0
-        case .fish: return 7.0 // Durasi efek untuk ikan (mempercepat kucing)
-        case .pillow: return 3.5 //durasi kucing tidur (stunt)
-        case .bubbleGum: return 3.5 //durasi brp lama hamster melambat
+        case .coin, .key: return 0 // Permanent effects
+        case .powerUp: return 5.0
+        case .shield: return 8.0
+        case .timeBonus: return 3.0
         }
     }
     
     var rarity: Float {
         switch self {
-        case .coin: return 0.9      // Common
-        case .shield: return 0.2   // Uncommon
-        case .fish: return 0.05    // Lebih jarang muncul karena membuat kucing lebih cepat (debuff)
-        case .pillow: return 0.15
-        case .bubbleGum: return 0.4
+        case .coin: return 0.7      // Common
+        case .powerUp: return 0.2   // Uncommon
+        case .shield: return 0.15   // Uncommon
+        case .timeBonus: return 0.1 // Rare
+        case .key: return 0.05      // Very rare (1 per maze)
         }
     }
 }
@@ -76,7 +74,7 @@ struct CollectibleComponent: GameComponent {
     }
 }
 
-// MARK: - Player Status Component (Hamster)
+// MARK: - Player Status Component
 
 struct PlayerStatusComponent: GameComponent {
     let entityId: UUID
@@ -95,8 +93,27 @@ struct PlayerStatusComponent: GameComponent {
         self.entityId = entityId
     }
     
-    // NOTE: Logika penerapan efek (yang memengaruhi entitas lain) DIPINDAHKAN ke CollectibleSystem
-    // PlayerStatusComponent hanya akan mengupdate status internalnya sendiri.
+    mutating func applyEffect(_ type: CollectibleType) {
+        let now = Date()
+        
+        switch type {
+        case .coin:
+            totalCollectibles += 1
+        case .powerUp:
+            hasSpeedBoost = true
+            speedBoostEndTime = now.addingTimeInterval(type.effectDuration)
+        case .shield:
+            hasShield = true
+            shieldEndTime = now.addingTimeInterval(type.effectDuration)
+        case .timeBonus:
+            isSlowMotion = true
+            slowMotionEndTime = now.addingTimeInterval(type.effectDuration)
+        case .key:
+            collectedKeys += 1
+            totalCollectibles += 1
+        }
+    }
+    
     mutating func updateEffects() {
         let now = Date()
         
@@ -127,39 +144,6 @@ struct PlayerStatusComponent: GameComponent {
     }
 }
 
-// MARK: - Cat Status Component (Baru/Diperbaiki)
-
-// Membuat komponen terpisah untuk status kucing agar lebih jelas
-struct CatStatusComponent: GameComponent {
-    let entityId: UUID
-    var isStunned: Bool = false // Contoh efek stun
-    var isSpeedBoosted: Bool = false // Untuk efek ikan
-    var speedMultiplier: Float = 1.0 // Pengganda kecepatan default
-    
-    var stunEndTime: Date?
-    var speedBoostEndTime: Date?
-    
-    init(entityId: UUID) {
-        self.entityId = entityId
-    }
-    
-    mutating func updateEffects() {
-        let now = Date()
-        
-        if let endTime = stunEndTime, now > endTime {
-            isStunned = false
-            stunEndTime = nil
-        }
-        
-        if let endTime = speedBoostEndTime, now > endTime {
-            isSpeedBoosted = false
-            speedBoostEndTime = nil
-            speedMultiplier = 1.0 // Reset multiplier saat efek berakhir
-        }
-    }
-}
-
-
 // MARK: - Collectible System
 
 class CollectibleSystem: GameSystem {
@@ -167,12 +151,6 @@ class CollectibleSystem: GameSystem {
     private var realityEntities: [UUID: Entity] = [:]
     private var gameService: GameService?
     private var requiredKeysForExit: Int = 1
-    // Tidak lagi menyimpan referensi langsung ke GameCoordinator di sini
-    // private var gameScene: GameCoordinator? // Hapus ini
-
-    // Tambahkan properti untuk ID entitas kucing dan hamster, yang akan disuntikkan dari GameCoordinator
-    var catEntityId: UUID?
-    var playerEntityId: UUID?
     
     init(componentManager: ComponentManager) {
         self.componentManager = componentManager
@@ -185,7 +163,6 @@ class CollectibleSystem: GameSystem {
     func update(deltaTime: TimeInterval) {
         updateCollectibleAnimations(deltaTime: deltaTime)
         updatePlayerEffects()
-        updateCatEffects() // Panggil pembaruan efek kucing
         checkCollisions()
     }
     
@@ -223,20 +200,14 @@ class CollectibleSystem: GameSystem {
     }
     
     private func updatePlayerEffects() {
-        guard let playerId = playerEntityId,
-              var playerStatus = componentManager.getComponent(PlayerStatusComponent.self, for: playerId) else { return }
+        let playerEntities = componentManager.getAllEntitiesWithComponent(PlayerStatusComponent.self)
         
-        playerStatus.updateEffects()
-        componentManager.addComponent(playerStatus, to: playerId)
-    }
-
-    // NEW: Metode untuk memperbarui efek kucing
-    private func updateCatEffects() {
-        guard let catId = catEntityId,
-              var catStatus = componentManager.getComponent(CatStatusComponent.self, for: catId) else { return }
-        
-        catStatus.updateEffects()
-        componentManager.addComponent(catStatus, to: catId)
+        for entityId in playerEntities {
+            guard var playerStatus = componentManager.getComponent(PlayerStatusComponent.self, for: entityId) else { continue }
+            
+            playerStatus.updateEffects()
+            componentManager.addComponent(playerStatus, to: entityId)
+        }
     }
     
     // MARK: - Collision Detection
@@ -289,57 +260,32 @@ class CollectibleSystem: GameSystem {
         collectible.isCollected = true
         componentManager.addComponent(collectible, to: collectibleId)
         
-        // === Logika penerapan efek di sini (di dalam System, bukan Component) ===
-        let now = Date()
-        switch collectible.collectibleType {
-        case .coin:
-            playerStatus.totalCollectibles += 1
-            gameService?.addPoints(collectible.collectibleType.points) // Menambah skor
-            print("✨ Collected \(collectible.collectibleType): +\(collectible.collectibleType.points) points")
-        case .shield:
-            playerStatus.hasShield = true
-            playerStatus.shieldEndTime = now.addingTimeInterval(collectible.collectibleType.effectDuration)
-            print("🛡️ Shield collected! Player has shield for \(collectible.collectibleType.effectDuration) seconds!")
-        case .fish:
-            // Temukan entitas kucing dan terapkan efek kepadanya
-            if let catId = self.catEntityId, // Menggunakan properti catEntityId dari CollectibleSystem
-               var catStatus = componentManager.getComponent(CatStatusComponent.self, for: catId) { // Menggunakan CatStatusComponent
-                
-                catStatus.isSpeedBoosted = true
-                catStatus.speedMultiplier = 1.5 // Contoh: Kucing 1.5x lebih cepat
-                catStatus.speedBoostEndTime = now.addingTimeInterval(collectible.collectibleType.effectDuration)
-                
-                componentManager.addComponent(catStatus, to: catId)
-                print("🐟 Fish collected! Cat is now faster for \(collectible.collectibleType.effectDuration) seconds!")
-            } else {
-                print("⚠️ Fish collected, but cat entity or CatStatusComponent not found for effect.")
-            }
-        case .pillow: // NEW: Tambahkan case untuk pillow
-                    if let catId = self.catEntityId,
-                       var catStatus = componentManager.getComponent(CatStatusComponent.self, for: catId) {
-                        
-                        catStatus.isStunned = true // Set status stunned menjadi true
-                        catStatus.stunEndTime = now.addingTimeInterval(collectible.collectibleType.effectDuration) // Atur timer stun
-                        
-                        componentManager.addComponent(catStatus, to: catId)
-                        print("😴 Pillow collected! Cat is stunned for \(collectible.collectibleType.effectDuration) seconds!")
-                    } else {
-                        print("⚠️ Pillow collected, but cat entity or CatStatusComponent not found for effect.")
-                    }
-        case .bubbleGum: // NEW: Tambahkan case untuk bubble gum
-                   playerStatus.isSlowMotion = true
-                   playerStatus.slowMotionEndTime = now.addingTimeInterval(collectible.collectibleType.effectDuration)
-                   print("🐌 Bubble Gum collected! Player is slowed for \(collectible.collectibleType.effectDuration) seconds!")
-        }
-        
-        // Simpan kembali PlayerStatusComponent setelah dimodifikasi
+        // Apply effect to player
+        playerStatus.applyEffect(collectible.collectibleType)
         componentManager.addComponent(playerStatus, to: ballId)
+        
+        // Add score
+        gameService?.addPoints(collectible.collectibleType.points)
         
         // Play collection effect
         playCollectionEffect(for: collectible.collectibleType, at: realityEntity.position)
         
         // Hide the collectible
         realityEntity.isEnabled = false
+        
+        print("✨ Collected \(collectible.collectibleType): +\(collectible.collectibleType.points) points")
+        
+        // Check if all keys collected for exit unlock
+        if collectible.collectibleType == .key {
+            checkExitUnlock(playerStatus: playerStatus)
+        }
+    }
+    
+    private func checkExitUnlock(playerStatus: PlayerStatusComponent) {
+        if playerStatus.collectedKeys >= requiredKeysForExit {
+            print("🚪 Exit unlocked! Player has all required keys.")
+            // Here you could trigger exit unlock visual effects
+        }
     }
     
     private func playCollectionEffect(for type: CollectibleType, at position: SIMD3<Float>) {
@@ -358,26 +304,12 @@ class CollectibleSystem: GameSystem {
         gameService = service
     }
     
-    // NEW: Metode untuk menyuntikkan ID entitas kucing dan pemain
-    func setCatEntityId(_ id: UUID) {
-        self.catEntityId = id
-    }
-
-    func setPlayerEntityId(_ id: UUID) {
-        self.playerEntityId = id
-    }
-    
     func setRequiredKeys(_ count: Int) {
         requiredKeysForExit = count
     }
     
     func getPlayerStatus(for playerId: UUID) -> PlayerStatusComponent? {
         return componentManager.getComponent(PlayerStatusComponent.self, for: playerId)
-    }
-
-    // NEW: Metode untuk mendapatkan status kucing
-    func getCatStatus(for catId: UUID) -> CatStatusComponent? {
-        return componentManager.getComponent(CatStatusComponent.self, for: catId)
     }
     
     func canPlayerExit(playerId: UUID) -> Bool {
@@ -415,19 +347,6 @@ class CollectibleSystem: GameSystem {
         info += "Total Collectibles: \(collectibleEntities.count)\n"
         info += "Collected: \(collected)\n"
         info += "Required Keys: \(requiredKeysForExit)\n"
-        
-        // Debug info untuk player status
-        if let playerId = playerEntityId, let playerStatus = getPlayerStatus(for: playerId) {
-            info += "Player Effects: \(playerStatus.activeEffectsDescription)\n"
-        }
-
-        // Debug info untuk cat status
-        if let catId = catEntityId, let catStatus = getCatStatus(for: catId) {
-            info += "Cat Speed Boosted: \(catStatus.isSpeedBoosted) (Multiplier: \(catStatus.speedMultiplier))\n"
-            info += "Cat Is Stunned: \(catStatus.isStunned)\n"
-        }
-        
-        
         
         return info
     }
@@ -476,15 +395,14 @@ extension EntityFactory {
         switch type {
         case .coin:
             geometry = MeshResource.generateSphere(radius: size * 0.5)
+        case .powerUp:
+            geometry = MeshResource.generateBox(size: SIMD3<Float>(size, size, size))
         case .shield:
             geometry = MeshResource.generateSphere(radius: size * 0.6)
-        case .fish:
-            geometry = MeshResource.generateSphere(radius: size * 0.3)
-        case .pillow:
-            geometry = MeshResource.generateBox(size: SIMD3<Float>(size * 0.8, size * 0.4, size * 0.6))
-        case .bubbleGum:
-            geometry = MeshResource.generateSphere(radius: size * 0.4)
-
+        case .timeBonus:
+            geometry = MeshResource.generateBox(size: SIMD3<Float>(size * 0.8, size * 0.8, size * 0.8))
+        case .key:
+            geometry = MeshResource.generateBox(size: SIMD3<Float>(size * 0.4, size * 0.8, size * 0.2))
         }
         
         let material = SimpleMaterial(color: type.color, isMetallic: false)
@@ -535,10 +453,10 @@ extension EntityFactory {
         
         var collectibleCounts: [CollectibleType: Int] = [:]
         
-//        // Distribute collectibles by rarity
+        // Distribute collectibles by rarity
         for type in CollectibleType.allCases {
             let count = Int(Float(baseCollectibles) * type.rarity)
-            collectibleCounts[type] = max(1, count) // Pastikan minimal 1 untuk semua tipe
+            collectibleCounts[type] = max(type == .key ? 1 : 0, count) // Ensure at least 1 key
         }
         
         // Place collectibles in random empty cells
