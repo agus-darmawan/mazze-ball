@@ -50,7 +50,7 @@ class MazeService: BaseService, MazeServiceProtocol {
             wallThickness: configuration.wallThickness
         )
         
-        let loopCount = max(1, (width * height) / 20)
+        let loopCount = max(1, (width * height) / 10)
         print("LOOP COUNT IS: \(loopCount)")
         
         // Use the existing MazeGenerator
