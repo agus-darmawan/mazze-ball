@@ -294,6 +294,23 @@ class AISystem: GameSystem {
                   var transformComponent = componentManager.getComponent(TransformComponent.self, for: entityId),
                   var pathfindingComponent = componentManager.getComponent(PathfindingComponent.self, for: entityId) else { continue }
             
+            // NEW: Dapatkan CatStatusComponent
+            var catStatus: CatStatusComponent? = componentManager.getComponent(CatStatusComponent.self, for: entityId)
+            
+            // Update CatStatusComponent effects (memastikan timer berjalan)
+            // Ini perlu dipanggil di sini juga, selain di CollectibleSystem, agar efek berakhir tepat waktu.
+            if var currentCatStatus = catStatus {
+                currentCatStatus.updateEffects()
+                componentManager.addComponent(currentCatStatus, to: entityId)
+                catStatus = currentCatStatus // Update optional var agar selalu paling baru
+            }
+            
+            // NEW: Jika kucing ter-stun, jangan lakukan pergerakan AI
+            if let currentCatStatus = catStatus, currentCatStatus.isStunned {
+                print("😴 Cat \(entityId) is stunned! Remaining time: \(String(format: "%.1f", max(0, currentCatStatus.stunEndTime?.timeIntervalSinceNow ?? 0)))s")
+                continue // Lewati sisa logika update untuk kucing ini
+            }
+
             // Don't activate cat until spawn delay has passed
             if !shouldCatBeActive {
                 print("😴 Cat waiting for spawn delay: \(String(format: "%.1f", catSpawnDelay - timeSinceStart))s remaining")
@@ -344,13 +361,16 @@ class AISystem: GameSystem {
                 aiComponent: &aiComponent,
                 pathfindingComponent: &pathfindingComponent,
                 transformComponent: &transformComponent,
-                deltaTime: deltaTime
+                deltaTime: deltaTime,
+                catStatus: catStatus // NEW: Passing catStatus to movement method
             )
             
             // Update components
             componentManager.addComponent(aiComponent, to: entityId)
             componentManager.addComponent(pathfindingComponent, to: entityId)
             componentManager.addComponent(transformComponent, to: entityId)
+            
+            // CatStatusComponent sudah diupdate di awal loop, jadi tidak perlu di sini lagi
         }
     }
     
@@ -446,7 +466,8 @@ class AISystem: GameSystem {
         aiComponent: inout AIAgentComponent,
         pathfindingComponent: inout PathfindingComponent,
         transformComponent: inout TransformComponent,
-        deltaTime: TimeInterval
+        deltaTime: TimeInterval,
+        catStatus: CatStatusComponent? // NEW: Terima CatStatusComponent di sini
     ) {
         guard pathfindingComponent.isFollowingPath && !pathfindingComponent.currentPath.isEmpty else {
             return
@@ -489,13 +510,20 @@ class AISystem: GameSystem {
             }
         }
         
+        // Hitung kecepatan efektif kucing
+        var effectiveSpeed = aiComponent.maxSpeed
+        if let currentCatStatus = catStatus, currentCatStatus.isSpeedBoosted {
+            effectiveSpeed *= currentCatStatus.speedMultiplier
+            print("🐱 Cat \(entityId) speed boosted! Effective speed: \(effectiveSpeed)")
+        }
+        
         // Move towards current waypoint with enhanced movement
         let nextWaypoint = pathfindingComponent.currentPath[pathfindingComponent.currentPathIndex]
         moveTowardsWaypointEnhanced(
             entity: realityEntity,
             from: currentPosition,
             to: nextWaypoint,
-            speed: aiComponent.maxSpeed,
+            speed: effectiveSpeed, // NEW: Gunakan effectiveSpeed di sini
             deltaTime: Float(deltaTime)
         )
         
@@ -523,7 +551,7 @@ class AISystem: GameSystem {
         let normalizedDirection = direction / distance
         
         // Calculate movement with speed limiting
-        let maxMoveDistance = speed * deltaTime
+        let maxMoveDistance = speed * deltaTime // Speed dikalikan deltaTime
         let moveDistance = min(maxMoveDistance, distance) // Don't overshoot
         let movement = normalizedDirection * moveDistance
         
@@ -598,6 +626,16 @@ class AISystem: GameSystem {
                 info += "  Following Path: \(pathComponent.isFollowingPath)\n"
                 info += "  Path Length: \(pathComponent.currentPath.count)\n"
                 info += "  Current Waypoint: \(pathComponent.currentPathIndex)\n"
+
+                // NEW: Tambahkan info status kucing untuk debugging
+                if let catStatus = componentManager.getComponent(CatStatusComponent.self, for: entityId) {
+                    info += "  Is Speed Boosted: \(catStatus.isSpeedBoosted)\n"
+                    info += "  Speed Multiplier: \(catStatus.speedMultiplier)\n"
+                    if let endTime = catStatus.speedBoostEndTime {
+                        let remainingTime = endTime.timeIntervalSinceNow
+                        info += "  Boost Remaining: \(String(format: "%.1f", max(0, remainingTime)))s\n"
+                    }
+                }
             }
         }
         
